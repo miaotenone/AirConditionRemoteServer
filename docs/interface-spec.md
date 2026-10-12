@@ -267,6 +267,22 @@
 > `select_static` 的 `options` 实际应列出 **16~30 全部 15 项**，这里只留两项示意。
 > 飞书卡片 schema 版本请以官方文档为准，实现时**锁定一个版本**并在 `cards.py` 里集中构造。
 
+**实现落点（2026-10-13）**：已锁定 **Card JSON 2.0**，对照官方
+[卡片 2.0 结构](https://open.feishu.cn/document/feishu-cards/card-json-v2-structure) 与
+[按钮组件](https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/button) 实现，
+全部集中在 `app/cards.py`。
+
+两处与上面示意不同、以官方文档为准的实现决定：
+
+1. **按钮回调**用 2.0 的写法：`"behaviors": [{"type": "callback", "value": {"a": ..., "v": ...}}]`
+   （2.0 不再支持 `"tag": "action"` 交互模块；按钮直接放进 `elements`）。
+2. **下拉选项的 `value` 是字符串**，不是对象 —— 飞书回来的是 `action.option`。
+   所以归一化放在 `app/actions.py`：`action.option == "24"` → `("temp", 24)`；
+   `action.value` 优先。`app/cards.py` 只管生成，`feishu_client` 只管收，
+   `actions.py` 是两者中间的纯函数。
+
+卡片的**视觉排布**（`column_set` 的 `width`/`weight`、按钮换行）需要首次联调时对着真机微调。
+
 ### 5.5 回调处理约定
 
 - 飞书要求回调 **3 秒内**响应 → 服务先返回"已接受 + 乐观卡片"，**不要**等 MQTT。
@@ -356,23 +372,29 @@ WantedBy=multi-user.target
 ```
 AirConditionRemoteServer/
   app/
-    main.py            # 装配：配置 → MQTT → 飞书 → 事件循环
-    config.py          # pydantic-settings
-    mqtt_client.py     # 连接/重连/订阅/发布 + 回调分发
-    state.py           # AcState / Presence / 乐观更新
-    cards.py           # 卡片 JSON 构造（纯函数，可单测）
-    feishu_client.py   # 长连接、发卡/更新卡、回调路由
-    store.py           # SQLite: owner_chat_id ↔ message_id（单条）
+    main.py            # ✅ 装配 + 事件循环（乐观更新 / 去抖 / 超时）
+    config.py          # ✅ pydantic-settings
+    mqtt_client.py     # ✅ 连接/重连/订阅/发布 + 回调分发
+    state.py           # ✅ AcState / Presence / 夹取 / 合并 / 指纹
+    actions.py         # ✅ 回调归一化：按钮 action.value 与下拉 action.option → (a, v)
+    cards.py           # ✅ 卡片 JSON 构造（纯函数）
+    feishu_client.py   # ✅ 长连接、发卡/更新卡、回调路由
+    store.py           # ✅ SQLite: owner ↔ message_id
   tests/
-    test_cards.py      # 卡片构造纯函数
-    test_state.py      # 乐观更新/合并/夹取
+    test_state.py      # ✅ 夹取 / 合并 / 指纹 / presence
+    test_cards.py      # ✅ 卡片结构与按钮回调值
+    test_actions.py    # ✅ 回调归一化与拒绝
+    test_config.py     # ✅ 环境变量契约
+    test_store.py      # ✅ 卡片映射
   deploy/
     mosquitto-ac.conf  # ✅ 已在树莓派部署并验证
-    ac-bot.service
+    ac-bot.service     # ✅ 注意 User=dirj（树莓派上没有 pi 用户）
   docs/
     interface-spec.md  # 本文件
     mqtt-bringup.md    # MQTT 链路验证记录 + 环境事实
+    feishu-setup.md    # 飞书自建应用 —— 建应用清单
   .env.example
+  .gitignore
   pyproject.toml
   README.md
 ```

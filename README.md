@@ -14,8 +14,9 @@
 |---|---|
 | MQTT 链路（ESP32 ⇄ Mosquitto ⇄ 树莓派）| ✅ **已完整验证**，见 [`docs/mqtt-bringup.md`](docs/mqtt-bringup.md) |
 | Mosquitto 部署 | ✅ 已装并 `enable`（[`deploy/mosquitto-ac.conf`](deploy/mosquitto-ac.conf)）|
-| 服务本体（`app/`）| ⬜ 未开工 |
-| 飞书自建应用 / 长连接 | ⬜ 未开工（需要 App ID/Secret）|
+| 服务本体 `app/` | ✅ 骨架完成；纯逻辑 **78 项单测全绿** |
+| 飞书自建应用 / 长连接 | ⬜ 待建 —— 照 [`docs/feishu-setup.md`](docs/feishu-setup.md) 走一遍 |
+| 首次端到端联调 | ⬜ 待做（要 App ID/Secret，还要对着真机微调卡片排版）|
 
 **已验证的证据**：上/下行双向通、拒绝类命令不动空调、接受类命令的 IR 帧与 `ac/state` 同步、
 越界夹取、连续快发取最后一条、断线后遗嘱 `{"online":false}` 与自动重连。细节见
@@ -50,11 +51,37 @@
 ## 目录结构
 
 ```
-app/            # 服务本体（未开工，规划见 docs/interface-spec.md §9）
-tests/          # cards.py / state.py 的纯函数单测
-deploy/         # mosquitto-ac.conf（✅ 已部署）、ac-bot.service
-docs/           # interface-spec.md（接口契约）、mqtt-bringup.md（验证记录 + 环境事实）
+app/
+  main.py          # 装配 + 事件循环：乐观更新 / 去抖合并 / 确认超时 / 过期提示
+  config.py        # pydantic-settings；密钥用 SecretStr，不会漏进日志
+  mqtt_client.py   # paho-mqtt 适配器：订阅 ac/state、ac/status，发布 ac/cmd
+  state.py         # AcState / Presence：夹取、动作应用、批量合并、内容指纹
+  actions.py       # 回调归一化：按钮 action.value 与下拉 action.option → (a, v)
+  cards.py         # 卡片 JSON 构造（纯函数；可 --print-card 直接看）
+  feishu_client.py # 长连接 + 发卡 / 更新卡
+  store.py         # SQLite：owner ↔ 卡片 message_id
+tests/             # 78 项单测，零外部依赖（不需要 broker、凭据或网络）
+deploy/            # mosquitto-ac.conf（✅ 已部署）、ac-bot.service
+docs/              # interface-spec.md（契约）、mqtt-bringup.md（MQTT 验证）、feishu-setup.md（建应用清单）
 ```
+
+## 跑起来 / 开发
+
+```bash
+# 跑测试：只用标准库 + pytest，不需要 MQTT、飞书或任何凭据
+python -m pytest -q
+
+# 看一眼卡片长什么样（不需要任何配置；卡片 JSON 直接打到终端）
+python -m app.main --print-card
+
+# 正式运行：需要 .env（照 .env.example 填）
+cp .env.example .env
+python -m app.main
+```
+
+设计上刻意让**纯逻辑与 I/O 分开**：`state.py` / `cards.py` / `actions.py` / `store.py`
+不依赖 MQTT 或飞书，所以点按钮的逻辑（夹取、去抖合并、回调归一化、卡片结构）
+能在本机毫秒级验证；`mqtt_client.py` / `feishu_client.py` 只是薄适配器。
 
 ## MQTT 契约速览
 
@@ -83,10 +110,16 @@ docs/           # interface-spec.md（接口契约）、mqtt-bringup.md（验证
 
 ## 下一步
 
-1. 搭 `app/` 骨架：`config.py`（pydantic-settings）→ `mqtt_client.py`（paho-mqtt，接本机 broker）
-   → `state.py` → `cards.py`，先把 **MQTT ⇄ 卡片** 跑通，再接飞书。
-2. 建飞书自建应用：拿 `App ID` / `App Secret`、开机器人能力与长连接所需事件权限。
-3. 端到端联调后，按 `docs/interface-spec.md` §8 上 systemd。
+1. **建飞书自建应用**：照 [`docs/feishu-setup.md`](docs/feishu-setup.md) 拿到 `App ID` /
+   `App Secret` / `OWNER_OPEN_ID`；订阅方式切成**长连接**；订阅 `im.message.receive_v1`
+   与卡片回调 `card.action.trigger`。
+2. **部署到树莓派**：`/opt/ac-bot` + venv + `.env`，按
+   [`deploy/ac-bot.service`](deploy/ac-bot.service) 上 systemd（注意 `User=dirj`）。
+3. **首次联调**（预计要来回几轮）：
+   - 对着真机微调卡片排版（`column_set` 的宽度、按钮换行）；
+   - 确认下拉 `select_static` 的回调确实走 `action.option`；
+   - 走一遍 [`feishu-setup.md`](docs/feishu-setup.md) §10 的 7 条验收清单。
+4. 收紧 MQTT 鉴权：`allow_anonymous` → 账号 + ACL，**两边一起改**。
 
 ## 说明与限制
 

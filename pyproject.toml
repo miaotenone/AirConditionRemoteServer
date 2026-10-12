@@ -1,0 +1,25 @@
+[project]
+name = "ac-bot"
+version = "0.1.0"
+description = "Feishu card <-> ESP32 AC gateway MQTT bridge for the Raspberry Pi"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "paho-mqtt>=2.0",
+    "lark-oapi>=1.4",
+    "pydantic-settings>=2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

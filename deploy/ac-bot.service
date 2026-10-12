@@ -1,0 +1,47 @@
+# /etc/systemd/system/ac-bot.service
+#
+# The Feishu <-> ESP32 bridge as a service. See docs/interface-spec.md section 8
+# and docs/feishu-setup.md for the whole deployment.
+#
+# Install on the Pi:
+#   sudo mkdir -p /opt/ac-bot && sudo chown dirj:dirj /opt/ac-bot
+#   # put this repo at /opt/ac-bot, then:
+#   cd /opt/ac-bot && python3 -m venv .venv && .venv/bin/pip install -e .
+#   cp .env.example .env && $EDITOR .env
+#   sudo cp deploy/ac-bot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now ac-bot
+#   journalctl -u ac-bot -f
+#
+# NOTE: runs as the normal account `dirj` (uid 1000), NOT root. The spec drafted
+# `User=pi`, but this Pi has no `pi` user -- `dirj` is the only human account.
+# It is already in the `sudo`, `gpio`, `i2c` and `dialout` groups.
+
+[Unit]
+Description=Feishu <-> ESP32 AC gateway bridge
+After=network-online.target mosquitto.service
+Wants=network-online.target
+# The bot is useless without the local broker, so tie them together.
+Requires=mosquitto.service
+
+[Service]
+Type=simple
+User=dirj
+Group=dirj
+WorkingDirectory=/opt/ac-bot
+EnvironmentFile=/opt/ac-bot/.env
+# Keep the SQLite card mapping out of the checkout so redeploys cannot lose it.
+StateDirectory=ac-bot
+StateDirectoryMode=0750
+Environment=DB_PATH=/var/lib/ac-bot/ac-bot.sqlite3
+ExecStart=/opt/ac-bot/.venv/bin/python -m app.main
+Restart=always
+RestartSec=5
+
+# One tiny process talking to the LAN broker and open.feishu.cn. Keep it tidy.
+NoNewPrivileges=true
+PrivateTmp=true
+Nice=5
+
+[Install]
+WantedBy=multi-user.target
