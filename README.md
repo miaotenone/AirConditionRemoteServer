@@ -14,14 +14,16 @@
 |---|---|
 | MQTT 链路（ESP32 ⇄ Mosquitto ⇄ 树莓派）| ✅ **已完整验证**，见 [`docs/mqtt-bringup.md`](docs/mqtt-bringup.md) |
 | Mosquitto 部署 | ✅ 已装并 `enable`（[`deploy/mosquitto-ac.conf`](deploy/mosquitto-ac.conf)）|
-| 服务本体 `app/` | ✅ 骨架完成；纯逻辑 **155 项单测全绿** |
-| 文本控制（发中文短句）| ✅ 已实现，见 §「文本控制」；真机验收待做 |
-| 飞书自建应用 / 长连接 | ⬜ 待建 —— 照 [`docs/feishu-setup.md`](docs/feishu-setup.md) 走一遍 |
-| 首次端到端联调 | ⬜ 待做（要 App ID/Secret，还要对着真机微调卡片排版）|
+| 服务本体 `app/` | ✅ 纯逻辑 **159 项单测全绿**（不需要 broker / 凭据 / 网络）|
+| 飞书自建应用 / 长连接 | ✅ 已建「空调适配」并发布；长连接每 90s 心跳，健康 |
+| **卡片端到端联调** | ✅ **已跑通**：10/10 回调解析正确、卡片原地 patch、`ac/cmd` 生效 → [`docs/feishu-bringup.md`](docs/feishu-bringup.md) |
+| 部署到树莓派 | ✅ `ac-bot.service` 已 `enable` + `active`（`User=dirj`）|
+| 文本控制（发中文短句）| ✅ 已实现并在真机使用中；验收清单 §10 尚有数项待走 |
 
 **已验证的证据**：上/下行双向通、拒绝类命令不动空调、接受类命令的 IR 帧与 `ac/state` 同步、
-越界夹取、连续快发取最后一条、断线后遗嘱 `{"online":false}` 与自动重连。细节见
-[`docs/mqtt-bringup.md`](docs/mqtt-bringup.md)。
+越界夹取、连续快发取最后一条、断线后遗嘱 `{"online":false}` 与自动重连
+（细节见 [`docs/mqtt-bringup.md`](docs/mqtt-bringup.md)）；飞书侧长连接、卡片下发与原地更新、
+按钮与下拉回调、多字段合并（细节见 [`docs/feishu-bringup.md`](docs/feishu-bringup.md)）。
 
 ## 架构
 
@@ -63,9 +65,10 @@ app/
   cards.py         # 卡片 JSON 构造（纯函数；可 --print-card 直接看）
   feishu_client.py # 长连接 + 发卡 / 更新卡 / 回文本
   store.py         # SQLite：owner ↔ 卡片 message_id、已处理消息去重
-tests/             # 155 项单测，零外部依赖（不需要 broker、凭据或网络）
+tests/             # 159 项单测，零外部依赖（不需要 broker、凭据或网络）
 deploy/            # mosquitto-ac.conf（✅ 已部署）、ac-bot.service
-docs/              # interface-spec.md（契约）、mqtt-bringup.md（MQTT 验证）、feishu-setup.md（建应用清单）
+docs/              # interface-spec.md（契约）、mqtt-bringup.md（MQTT 验证）、
+                   # feishu-bringup.md（飞书链路验证）、feishu-setup.md（建应用清单）
 ```
 
 ## 跑起来 / 开发

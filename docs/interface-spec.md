@@ -464,6 +464,7 @@ AirConditionRemoteServer/
   docs/
     interface-spec.md  # 本文件
     mqtt-bringup.md    # MQTT 链路验证记录 + 环境事实
+    feishu-bringup.md  # 飞书链路验证记录（长连接 / 卡片回调 / 环境标识）
     feishu-setup.md    # 飞书自建应用 —— 建应用清单
   .env.example
   .gitignore

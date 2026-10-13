@@ -144,7 +144,12 @@ python -m app.main
 
 ## 11. 常见坑
 
-1. **卡片发出来了，但点按钮没反应** → 第 6 步的回调没订阅，或订阅成了 `v1` 版本。
+1. **卡片发出来了，但点按钮没反应** → 三种原因，靠日志区分：
+   - 长连接里**一个回调包都收不到** → 第 6 步的回调没订阅，或订阅成了 `v1` 版本；
+   - 收到了但字段读错层级，日志是 `card action from : value=None option=None`
+     → 数据在 `data.event` 下而代码读了顶层（见 §12）；
+   - 收到了、字段也对，但被丢弃，日志是 `ignoring event from non-owner 'ou_…'`
+     → `OWNER_OPEN_ID` 没填对。
 2. **完全收不到消息** → 第 4 步没切成「长连接」，或机器人能力没开，或应用没发布/不在可用范围。
 3. **`app not found` / `invalid app_id`** → App ID/Secret 抄错，或复制时带了空格；`.env` 里不要加引号。
 4. **能收消息但发不出卡片** → 缺 `im:message:send_as_bot` 权限，或权限加了但**没重新发布版本**（权限变更要重新发版才生效）。
@@ -170,8 +175,12 @@ python -m app.main
 - 卡片点击回调返回 `P2CardActionTriggerResponse({})`
   （来自 `lark_oapi.event.callback.model.p2_card_action_trigger`；SDK 自己的
   `channel.py` 就是这么写的 —— **不是** `lark.P2CardActionTriggerResponse`）。
-- 回调数据字段：`data.operator.open_id`、`data.action.value`、`data.action.option`、
-  `data.context.open_chat_id`、`data.context.open_message_id`
+- 回调数据**嵌在 `event` 下**（`P2CardActionTrigger` 只把 `event` 映射成
+  `P2CardActionTriggerData`）：`data.event.operator.open_id`、
+  `data.event.action.value`、`data.event.action.option`、
+  `data.event.context.open_chat_id`、`data.event.context.open_message_id`。
+  **读顶层不报错，只会静默得到全 `None`** —— 2026-10-14 就是这样丢了 4 次真实点击，
+  详见 [`feishu-bringup.md`](feishu-bringup.md) §4。
 - 发卡片：`POST /im/v1/messages`（`msg_type=interactive`）；
   更新卡片：`PATCH /im/v1/messages/:message_id`
 - 回文本：`POST /im/v1/messages/:message_id/reply`（`ReplyMessageRequest`，`msg_type=text`，
