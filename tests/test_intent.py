@@ -93,3 +93,66 @@ def test_kaidao_without_a_number_does_not_invent_temperature():
 def test_last_temperature_wins():
     assert parse("调到24，算了26").actions == (("temp", 26),)
     assert parse("调到24再低两度").actions == (("temp_step", -2),)
+
+
+def test_query():
+    for text in ("状态", "现在多少度", "开着吗", "几度"):
+        assert parse(text) == Intent(kind="query"), text
+
+
+def test_questions_are_queries_not_commands():
+    # 「开着吗」里有个「开」——不能当成开机，这是最直接的一类误触发
+    for text in ("开着吗", "开机了吗", "制冷了吗"):
+        assert parse(text).kind == "query", text
+        assert parse(text).actions == ()
+
+
+def test_help():
+    for text in ("帮助", "怎么用", "能做什么"):
+        assert parse(text) == Intent(kind="help"), text
+
+
+def test_unclear_inputs_never_crash():
+    for text in ("", "   ", "你好", "2", "空调🥶", "😀"):
+        assert parse(text).kind == "unclear", text
+
+
+def test_suggest_is_direction_aware():
+    assert parse("太热了") == Intent(kind="suggest", hint="hot")
+    assert parse("有点热") == Intent(kind="suggest", hint="hot")
+    assert parse("有点冷") == Intent(kind="suggest", hint="cold")
+    assert parse("好冷") == Intent(kind="suggest", hint="cold")
+    assert parse("有点闷") == Intent(kind="suggest", hint="")
+
+
+def test_suggest_never_carries_an_action():
+    # 设计 D12 —— 反目标「误触发」的守护测试
+    for text in ("太热了", "有点冷", "有点闷"):
+        assert parse(text).actions == (), text
+
+
+def test_an_explicit_action_beats_the_adjective():
+    # 形容词本身不执行，但用户把动作说清楚了就照做
+    assert parse("太热了，制冷24度").actions == (("mode", 1), ("temp", 24))
+
+
+def test_bare_number_is_not_a_temperature():
+    assert parse("2").kind == "unclear"
+    assert parse("风速2档").actions == (("fan", 2),)
+
+
+def test_negation_drops_the_action_and_records_it():
+    assert parse("不要制冷") == Intent(kind="actions", hint="negated:mode")
+    assert parse("不要制冷，调到24度").actions == (("temp", 24),)
+    assert parse("不要制冷，调到24度").hint == "negated:mode"
+
+
+def test_bu_yong_le_is_power_off_not_a_negation():
+    # 「不用了」整体是关机词，不能被拆成「不用」+「了」
+    assert parse("不用了") == Intent(kind="actions", actions=(("power", 0),))
+
+
+def test_multiple_actions_are_canonically_ordered():
+    assert parse("开机制冷24度") == Intent(
+        kind="actions", actions=(("power", 1), ("mode", 1), ("temp", 24))
+    )

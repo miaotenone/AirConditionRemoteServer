@@ -37,6 +37,22 @@ _FAN_LEVELS = {"最大": 3, "大": 3, "强": 3, "中": 2, "小": 1, "低": 1, "�
 _POWER_ON_WORDS = ("开机", "开空调", "打开空调", "开一下", "启动", "打开", "开")
 _POWER_OFF_WORDS = ("关机", "关掉", "关闭", "关一下", "停了", "不用了", "停", "关")
 
+#: Asking about the AC, never commanding it. Checked *before* actions on
+#: purpose: "开着吗" contains "开", and reading that as "turn on" is the single
+#: most obvious way to move the machine by accident.
+_QUERY_WORDS = ("状态", "多少度", "几度", "开着吗", "开着没", "怎么样")
+_QUERY_SUFFIXES = ("吗", "呢")
+_HELP_WORDS = ("帮助", "怎么用", "能做什么", "指令", "help")
+
+#: Feeling words. They carry no action (design D12) -- only a direction for the
+#: reply, because "太热了" is equally satisfied by -1, -3 or switching to cool.
+_HOT_WORDS = ("太热", "好热", "有点热", "热死", "闷热")
+_COLD_WORDS = ("太冷", "好冷", "有点冷", "冻死")
+_NEUTRAL_WORDS = ("闷", "不舒服", "难受")
+
+#: Longest first: "不需要" must win over "不用" so a prefix never shadows it.
+_NEGATION_WORDS = ("不需要", "不要", "不用", "别")
+
 #: Tie-break when two patterns match the same span; higher wins. Only reachable
 #: for identical words living in two tables, which the current tables avoid --
 #: it is here so a future addition cannot silently flip a word's meaning.
@@ -139,10 +155,12 @@ def _build_rules() -> tuple[_Rule, ...]:
     rules: list[_Rule] = []
 
     # -- temperature, most specific first -----------------------------------
-    def kaidao(match: re.Match) -> tuple[tuple[str, str, int], ...]:
-        temperature = _to_int(match.group("num"))
-        return (("power", "power", 1), ("temp", "temp", temperature))
 
+    def kaidao(match: re.Match) -> tuple[tuple[str, str, int], ...]:
+        return (("power", "power", 1), ("temp", "temp", _to_int(match.group("num"))))
+
+    # "开到 26" reads as power *and* setpoint; the following `开` in the power
+    # table must not fire again, which is why this consumes the whole span.
     rules.append(_Rule(
         re.compile(rf"(?:开到|开成)(?P<num>{_NUMBER}){_UNIT}?"),
         "power", _RULE_TIE_BREAK["power"] + 10, kaidao))
@@ -185,6 +203,12 @@ def _build_rules() -> tuple[_Rule, ...]:
         for shape in (f"风速{level}", f"{level}风", f"{level}档"):
             rules.append(_static(shape, "fan", "fan", value))
 
+    # "风速2档" -- a numbered step, which the word table above cannot express.
+    rules.append(_Rule(
+        re.compile(r"(?P<step>[0-3])(?:档|档位)"),
+        "fan", 20,
+        lambda match: (("fan", "fan", int(match.group("step"))),)))
+
     for word in _POWER_ON_WORDS:
         rules.append(_static(word, "power", "power", 1))
     for word in _POWER_OFF_WORDS:
@@ -199,6 +223,59 @@ _RULES = _build_rules()
 # ------------------------------------------------------------------------ parse
 
 
+def _best_rule_at(text: str, index: int,
+                  found: dict[str, tuple[str, int]]) -> tuple[_Rule, re.Match, int] | None:
+    """The longest rule matching at `index`, ties broken by priority."""
+    best: _Rule | None = None
+    best_match: re.Match | None = None
+    best_span = 0
+
+    for rule in _RULES:
+        if rule.requires is not None and rule.requires not in found:
+            continue
+        match = rule.pattern.match(text, index)
+        if match is None:
+            continue
+        span = match.end() - match.start()
+        if span > best_span or (
+            span == best_span and best is not None and rule.priority > best.priority
+        ):
+            best, best_match, best_span = rule, match, span
+
+    if best is None or best_match is None:
+        return None
+    return best, best_match, best_span
+
+
+def _strip_negations(text: str) -> tuple[str, list[str]]:
+    """Drop "<negation><action>" spans, remembering which field was refused.
+
+    Only a negation *immediately* followed by something we recognise counts.
+    That is what keeps "不用了" whole as the power-off word instead of reading it
+    as "不用" plus a stray "了" (design 4.3).
+    """
+    tokens: list[str] = []
+    kept: list[str] = []
+    index = 0
+
+    while index < len(text):
+        for marker in _NEGATION_WORDS:
+            if not text.startswith(marker, index):
+                continue
+            hit = _best_rule_at(text, index + len(marker), {})
+            if hit is None:
+                continue
+            rule, match, _span = hit
+            tokens.append(f"negated:{rule.field}")
+            index = match.end()
+            break
+        else:
+            kept.append(text[index])
+            index += 1
+
+    return "".join(kept), tokens
+
+
 def _scan(text: str) -> dict[str, tuple[str, int]]:
     """Walk the sentence left to right, letting the longest match win.
 
@@ -209,40 +286,59 @@ def _scan(text: str) -> dict[str, tuple[str, int]]:
     """
     found: dict[str, tuple[str, int]] = {}
     index = 0
-    length_of_text = len(text)
 
-    while index < length_of_text:
-        best: _Rule | None = None
-        best_match: re.Match | None = None
-        best_span = 0
-
-        for rule in _RULES:
-            if rule.requires is not None and rule.requires not in found:
-                continue
-            match = rule.pattern.match(text, index)
-            if match is None:
-                continue
-            span = match.end() - match.start()
-            if span > best_span or (
-                span == best_span and best is not None and rule.priority > best.priority
-            ):
-                best, best_match, best_span = rule, match, span
-
-        if best is None or best_match is None:
+    while index < len(text):
+        hit = _best_rule_at(text, index, found)
+        if hit is None:
             index += 1
             continue
-
-        for field, action, value in best.build(best_match):
+        rule, match, span = hit
+        for field, action, value in rule.build(match):
             found[field] = (action, value)
-        index += best_span
+        index += span
 
     return found
 
 
+def _adjective(text: str) -> str | None:
+    """The direction a feeling word points in, or None if it is not one."""
+    for word in _HOT_WORDS:
+        if word in text:
+            return "hot"
+    for word in _COLD_WORDS:
+        if word in text:
+            return "cold"
+    for word in _NEUTRAL_WORDS:
+        if word in text:
+            return ""
+    return None
+
+
 def parse(text: str) -> Intent:
-    """Turn one message into the actions it asks for (design 4.2/4.3)."""
-    found = _scan(normalize(text))
-    if not found:
-        return Intent(kind="unclear")
-    actions = tuple(found[field] for field in FIELD_ORDER if field in found)
-    return Intent(kind="actions", actions=actions)
+    """Turn one message into what it asks for (design 4.2/4.3).
+
+    Order matters: questions and help come first (they must never reach the
+    action grammar), then explicit actions, then the purely-refusal case, and
+    only then the feeling words -- which never carry an action themselves.
+    """
+    clean, negated = _strip_negations(normalize(text))
+
+    if any(word in clean for word in _QUERY_WORDS) or clean.endswith(_QUERY_SUFFIXES):
+        return Intent(kind="query")
+    if any(word in clean for word in _HELP_WORDS):
+        return Intent(kind="help")
+
+    found = _scan(clean)
+    if found:
+        actions = tuple(found[field] for field in FIELD_ORDER if field in found)
+        return Intent(kind="actions", actions=actions, hint=",".join(negated))
+
+    if negated:
+        # We understood the message -- there was just nothing left to do.
+        return Intent(kind="actions", hint=",".join(negated))
+
+    direction = _adjective(clean)
+    if direction is not None:
+        return Intent(kind="suggest", hint=direction)
+
+    return Intent(kind="unclear")
