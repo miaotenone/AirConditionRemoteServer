@@ -70,7 +70,9 @@ def test_query_reports_an_offline_device():
 
 def test_help_and_unclear():
     assert render(parse("帮助"), ON, ONLINE) == HELP_TEXT
-    assert render(parse("你好"), ON, ONLINE) == f"没听懂这句。{HELP_TEXT}"
+    # 设计 5.4：没听懂用「试试：」，与帮助行的「能听懂这些：」不同前缀
+    assert render(parse("你好"), ON, ONLINE) == \
+        "没听懂这句。试试：开机 / 关掉 / 调到24度 / 制冷 / 风速最大 / 状态"
 
 
 def test_suggest_wording_follows_the_direction():

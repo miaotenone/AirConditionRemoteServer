@@ -156,3 +156,37 @@ def test_multiple_actions_are_canonically_ordered():
     assert parse("开机制冷24度") == Intent(
         kind="actions", actions=(("power", 1), ("mode", 1), ("temp", 24))
     )
+
+
+def test_english_mode_words_are_recognised_the_same_way():
+    # 设计 4.1 第 4 条：英文词小写化后同样识别（空调面板上的 COOL/HEAT/…）
+    assert parse("COOL").actions == (("mode", 1),)
+    assert parse("cool").actions == (("mode", 1),)
+    assert parse("HEAT").actions == (("mode", 4),)
+    assert parse("DRY").actions == (("mode", 2),)
+    assert parse("FAN").actions == (("mode", 3),)
+    assert parse("AUTO").actions == (("mode", 0),)
+
+
+def test_liang_yidian_is_a_cooler_step():
+    # 设计 4.2 写的是「凉一点」，不是只有「凉快一点」
+    assert parse("凉一点").actions == (("temp_step", -1),)
+    assert parse("凉快一点").actions == (("temp_step", -1),)
+
+
+def test_a_number_bound_by_a_wind_word_is_a_fan_step():
+    # 设计 4.3：档 / 档位 / 风速 / 风 都把数字绑到风速，而不是温度
+    assert parse("风速2").actions == (("fan", 2),)
+    assert parse("2档位").actions == (("fan", 2),)
+    assert parse("3风").actions == (("fan", 3),)
+
+
+def test_full_width_input_is_parsed_like_half_width():
+    # 设计 7「全角/大小写」：２４ 与 24 同义（归一化折叠全角）
+    assert parse("调到２４度").actions == (("temp", 24),)
+    assert parse("风速２档").actions == (("fan", 2),)
+
+
+def test_low_two_degrees_without_the_diao_prefix():
+    # 设计 7 逐字点名的例子
+    assert parse("低两度").actions == (("temp_step", -2),)

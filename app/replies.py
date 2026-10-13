@@ -13,7 +13,12 @@ from .cards import FAN_LABELS, MODE_LABELS
 from .intent import Intent
 from .state import TEMP_MAX, TEMP_MIN, AcState, Presence, apply_action, clamp_temp
 
-HELP_TEXT = "能听懂这些：开机 / 关掉 / 调到24度 / 制冷 / 风速最大 / 状态"
+#: The one-line grammar reminder. Both replies below quote it, but with
+#: different intros -- saying "能听懂这些" to someone you just failed to
+#: understand reads as a rebuke (design 5.4).
+_GRAMMAR_HINT = "开机 / 关掉 / 调到24度 / 制冷 / 风速最大 / 状态"
+HELP_TEXT = f"能听懂这些：{_GRAMMAR_HINT}"
+UNCLEAR_TEXT = f"没听懂这句。试试：{_GRAMMAR_HINT}"
 
 #: Human names for the fields a refusal can name.
 _FIELD_NAMES = {"power": "电源", "mode": "模式", "temp": "温度", "fan": "风速"}
@@ -105,7 +110,7 @@ def render(intent: Intent, state: AcState, presence: Presence, *,
         return HELP_TEXT
 
     if intent.kind == "unclear":
-        return f"没听懂这句。{HELP_TEXT}"
+        return UNCLEAR_TEXT
 
     if intent.kind == "suggest":
         return _suggest_text(intent.hint)

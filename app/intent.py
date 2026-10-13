@@ -22,13 +22,15 @@ Kind = Literal["actions", "query", "help", "unclear", "suggest"]
 #: Canonical order of the actions in an Intent (design 4.3).
 FIELD_ORDER = ("power", "mode", "temp", "fan")
 
-#: Modes the AC has, as words (design 4.2).
+#: Modes the AC has, as words (design 4.2). The English names are the ones
+#: printed on the unit's own panel, so they are recognised too (design 4.1).
 _MODE_WORDS = {
     "制冷": 1, "冷风": 1,
     "除湿": 2, "抽湿": 2,
     "送风": 3, "吹风": 3,
     "制热": 4, "暖风": 4, "热风": 4, "加热": 4,
     "自动": 0,
+    "cool": 1, "dry": 2, "fan": 3, "heat": 4, "auto": 0,
 }
 
 #: Fan steps, expressed as "风速<level>", "<level>风" or "<level>档".
@@ -53,10 +55,16 @@ _NEUTRAL_WORDS = ("闷", "不舒服", "难受")
 #: Longest first: "不需要" must win over "不用" so a prefix never shadows it.
 _NEGATION_WORDS = ("不需要", "不要", "不用", "别")
 
-#: Tie-break when two patterns match the same span; higher wins. Only reachable
-#: for identical words living in two tables, which the current tables avoid --
-#: it is here so a future addition cannot silently flip a word's meaning.
-_RULE_TIE_BREAK = {"fan": 20, "temp": 15, "mode": 10, "power": 30}
+#: Tie-break when two patterns match the same span; higher wins. The order
+#: follows design 4.3 (power/mode words -> temperature -> fan). It is
+#: unreachable for the tables below -- two rules can only tie on the same span
+#: if they are the same string -- but it is here so a future addition cannot
+#: silently flip a word's meaning.
+_RULE_TIE_BREAK = {"power": 40, "mode": 30, "temp": 20, "fan": 10}
+
+#: A bare number is the weakest thing in the grammar: it must lose to every
+#: explicit rule of the same length (design 4.3).
+_BARE_NUMBER_PRIORITY = 1
 
 _DIGITS = r"[0-9]+"
 _CHINESE_DIGITS = r"[一二两三四五六七八九十]+"
@@ -67,7 +75,8 @@ _CN_SINGLE = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
               "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 
 #: Warming words move the setpoint up, cooling words move it down (design 4.2).
-_COOLER = ("调低", "降", "低", "凉快", "冷")
+#: `凉快` must stay ahead of `凉` so the longer word wins the alternation.
+_COOLER = ("调低", "降", "低", "凉快", "冷", "凉")
 _WARMER = ("调高", "升", "高", "暖", "热")
 
 
@@ -170,10 +179,10 @@ def _build_rules() -> tuple[_Rule, ...]:
 
     rules.append(_Rule(
         re.compile(rf"(?:调到|设成|设置成|设到|温度|调成)(?P<num>{_NUMBER}){_UNIT}?"),
-        "temp", 15, absolute))
+        "temp", _RULE_TIE_BREAK["temp"], absolute))
     rules.append(_Rule(
         re.compile(rf"(?P<num>{_NUMBER}){_UNIT}"),
-        "temp", 15, absolute))
+        "temp", _RULE_TIE_BREAK["temp"], absolute))
 
     def relative(match: re.Match) -> tuple[tuple[str, str, int], ...]:
         amount = match.group("amount")
@@ -185,13 +194,13 @@ def _build_rules() -> tuple[_Rule, ...]:
         re.compile(
             rf"(?P<dir>{'|'.join(_COOLER + _WARMER)})"
             rf"(?P<amount>{_NUMBER}|一点){_UNIT}?"),
-        "temp", 15, relative))
+        "temp", _RULE_TIE_BREAK["temp"], relative))
 
     # A bare number only means a temperature once the sentence has already
     # established one ("调到24，算了26" -> 26, but "2" alone -> nothing).
     rules.append(_Rule(
         re.compile(rf"(?P<num>{_DIGITS})"),
-        "temp", 5,
+        "temp", _BARE_NUMBER_PRIORITY,
         lambda match: (("temp", "temp", int(match.group("num"))),),
         requires="temp"))
 
@@ -203,11 +212,15 @@ def _build_rules() -> tuple[_Rule, ...]:
         for shape in (f"风速{level}", f"{level}风", f"{level}档"):
             rules.append(_static(shape, "fan", "fan", value))
 
-    # "风速2档" -- a numbered step, which the word table above cannot express.
-    rules.append(_Rule(
-        re.compile(r"(?P<step>[0-3])(?:档|档位)"),
-        "fan", 20,
-        lambda match: (("fan", "fan", int(match.group("step"))),)))
+    # A numbered step ("风速2", "2档", "3风") -- the word table above can only
+    # express the named levels (最大/大/中/…), not a bare digit.
+    def fan_step(match: re.Match) -> tuple[tuple[str, str, int], ...]:
+        return (("fan", "fan", int(match.group("step"))),)
+
+    rules.append(_Rule(re.compile(r"风速(?P<step>[0-3])"),
+                       "fan", _RULE_TIE_BREAK["fan"], fan_step))
+    rules.append(_Rule(re.compile(r"(?P<step>[0-3])(?:档位|档|风)"),
+                       "fan", _RULE_TIE_BREAK["fan"], fan_step))
 
     for word in _POWER_ON_WORDS:
         rules.append(_static(word, "power", "power", 1))
