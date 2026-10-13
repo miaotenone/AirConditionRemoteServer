@@ -43,3 +43,28 @@ def test_store_clears_a_record():
     store.set_message_id("ou_x", "om_1")
     store.clear_message_id("ou_x")
     assert store.get_message_id("ou_x") is None
+
+
+def test_mark_seen_is_true_only_the_first_time():
+    store = CardStore(":memory:")
+    assert store.mark_seen("om_1") is True
+    assert store.mark_seen("om_1") is False
+
+
+def test_mark_seen_keeps_ids_separate():
+    store = CardStore(":memory:")
+    assert store.mark_seen("om_1") is True
+    assert store.mark_seen("om_2") is True
+
+
+def test_mark_seen_survives_reopening_the_database_file(tmp_path):
+    path = tmp_path / "ac-bot.sqlite3"
+    CardStore(path).mark_seen("om_1")
+    assert CardStore(path).mark_seen("om_1") is False
+
+
+def test_mark_seen_ignores_an_empty_id():
+    # 空 id 说明上游没给 message_id，不能把它当成「已经见过」
+    store = CardStore(":memory:")
+    assert store.mark_seen("") is True
+    assert store.mark_seen("") is True
