@@ -30,6 +30,8 @@ from lark_oapi.api.im.v1 import (
     CreateMessageRequestBody,
     PatchMessageRequest,
     PatchMessageRequestBody,
+    ReplyMessageRequest,
+    ReplyMessageRequestBody,
 )
 from lark_oapi.event.callback.model.p2_card_action_trigger import (
     P2CardActionTriggerResponse,
@@ -39,8 +41,8 @@ log = logging.getLogger(__name__)
 
 #: (open_id, chat_id, message_id, action.value, action.option) -> None
 ActionHandler = Callable[[str, str, str, Any, Any], None]
-#: (open_id, chat_id, text) -> None
-TextHandler = Callable[[str, str, str], None]
+#: (open_id, chat_id, message_id, text) -> None
+TextHandler = Callable[[str, str, str, str], None]
 
 
 class FeishuClient:
@@ -94,6 +96,30 @@ class FeishuClient:
             return False
         return True
 
+    def reply_text(self, message_id: str, text: str) -> bool:
+        """Answer one message in its own thread -- a plain text receipt.
+
+        Receipts go out as replies rather than new top-level messages so a
+        conversation stays readable; the card, not the chat log, is the
+        interface that gets updated in place (design 5.1/5.4).
+        """
+        request = (
+            ReplyMessageRequest.builder()
+            .message_id(message_id)
+            .request_body(
+                ReplyMessageRequestBody.builder()
+                .msg_type("text")
+                .content(_dump_text(text))
+                .build()
+            )
+            .build()
+        )
+        response = self._api.im.v1.message.reply(request)
+        if not response.success():
+            log.error("reply_text failed: code=%s msg=%s", response.code, response.msg)
+            return False
+        return True
+
     # ------------------------------------------------- long connection (inbound)
 
     def start(self) -> None:
@@ -138,7 +164,7 @@ class FeishuClient:
         return P2CardActionTriggerResponse({})
 
     def _on_message(self, data) -> None:
-        """A plain text message (e.g. "/ac") asks for the card to be posted."""
+        """A plain text message is a command (or a "/ac" asking for the card)."""
         try:
             event = getattr(data, "event", None)
             message = _get(event, "message", None)
@@ -147,10 +173,11 @@ class FeishuClient:
             sender = _get(event, "sender", None)
             open_id = _get(_get(sender, "sender_id", None), "open_id", "")
             chat_id = _get(message, "chat_id", "")
+            message_id = _get(message, "message_id", "")
             text = _extract_text(_get(message, "content", ""))
             log.info("text message from %s: %r", open_id, text)
             if self.on_text:
-                self.on_text(open_id, chat_id, text)
+                self.on_text(open_id, chat_id, message_id, text)
         except Exception:  # noqa: BLE001
             log.exception("message handler failed")
         return None
@@ -163,6 +190,11 @@ def _lark_log_level(name: str):
 
 def _dump(card: dict) -> str:
     return json.dumps(card, ensure_ascii=False, separators=(",", ":"))
+
+
+def _dump_text(text: str) -> str:
+    """Feishu wants text message bodies as ``{"text": "..."}`` JSON."""
+    return json.dumps({"text": text}, ensure_ascii=False, separators=(",", ":"))
 
 
 def _get(obj: Any, name: str, default: Any = None) -> Any:
