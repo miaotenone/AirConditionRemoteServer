@@ -40,6 +40,9 @@
 | 读取用户发给机器人的单聊消息（`im:message.p2p_msg:readonly`）| 拿 `chat_id` |
 
 > 卡片按钮点击**不走**权限，走第 5 步的「回调」。
+>
+> 文本回执（`im.v1.message.reply`）用的就是上面这个 `im:message:send_as_bot`，**不需要额外权限**；
+> 但和发卡片一样，权限改动后必须**重新发布版本**才生效（见第 11 节第 4 条）。
 
 ## 4. 事件订阅方式切成「长连接」
 
@@ -113,6 +116,17 @@ python -m app.main
 > 第 5 条就是 [`mqtt-bringup.md`](mqtt-bringup.md) §5 说的**影子状态陷阱**：固件不知道你用
 > 实体遥控器做了什么，只能靠它下一次上报来对齐。
 
+文本控制的验收（完整 13 条见设计文档 §8，这里是最关键的几条）：
+
+| # | 操作 | 预期 |
+|---|---|---|
+| 8 | 发「开机制冷24度」 | 回 `✅ 已开机 · 制冷 · 24℃ · 自动风`；日志里**只有一行** `ac/cmd`（含 3 个字段）|
+| 9 | 发「太热了」 | 回一条建议；**没有** `ac/cmd`，空调不动 |
+| 10 | 发「调低两度」三遍 | 回三条回执，温度降 6℃（去重只管重投，不管重复发）|
+| 11 | 发「状态」 | 回 `现在 …`；卡片**不闪**（内容没变就不 patch）|
+| 12 | 发「不要制冷」 | 回 `好，模式没动`；空调不动 |
+| 13 | 发「你好」 | 回 `没听懂这句。` + 语法清单 |
+
 ---
 
 ## 11. 常见坑
@@ -123,6 +137,8 @@ python -m app.main
 4. **能收消息但发不出卡片** → 缺 `im:message:send_as_bot` 权限，或权限加了但**没重新发布版本**（权限变更要重新发版才生效）。
 5. **卡片能显示但更新不了** → 卡片 JSON 里 `config.update_multi` 必须为 `true`（我们的 `cards.py` 已经设了）。
 6. **长连接反复断** → 同一 App 用同一个长连接客户端 id 多处登录会互相踢；确认只有这一个进程。
+7. **文本回执发不出去** → 日志里看 `reply_text failed: code=… msg=…`。和发卡片同权限同发版要求；
+   另外回复的是**原消息**，若那条消息已被撤回/删除，`reply` 会失败但**不影响** `ac/cmd` 已经生效。
 
 ---
 
@@ -145,5 +161,7 @@ python -m app.main
   `data.context.open_chat_id`、`data.context.open_message_id`
 - 发卡片：`POST /im/v1/messages`（`msg_type=interactive`）；
   更新卡片：`PATCH /im/v1/messages/:message_id`
+- 回文本：`POST /im/v1/messages/:message_id/reply`（`ReplyMessageRequest`，`msg_type=text`，
+  `content` 是 `{"text":"…"}` 的 JSON 字符串）—— 回在**原消息线程**里，不刷屏
 - 卡片 JSON 用 **2.0**（`"schema": "2.0"`）；按钮回调写成
   `"behaviors": [{"type": "callback", "value": {"a": "...", "v": ...}}]`

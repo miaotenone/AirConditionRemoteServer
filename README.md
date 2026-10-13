@@ -14,7 +14,8 @@
 |---|---|
 | MQTT 链路（ESP32 ⇄ Mosquitto ⇄ 树莓派）| ✅ **已完整验证**，见 [`docs/mqtt-bringup.md`](docs/mqtt-bringup.md) |
 | Mosquitto 部署 | ✅ 已装并 `enable`（[`deploy/mosquitto-ac.conf`](deploy/mosquitto-ac.conf)）|
-| 服务本体 `app/` | ✅ 骨架完成；纯逻辑 **78 项单测全绿** |
+| 服务本体 `app/` | ✅ 骨架完成；纯逻辑 **139 项单测全绿** |
+| 文本控制（发中文短句）| ✅ 已实现，见 §「文本控制」；真机验收待做 |
 | 飞书自建应用 / 长连接 | ⬜ 待建 —— 照 [`docs/feishu-setup.md`](docs/feishu-setup.md) 走一遍 |
 | 首次端到端联调 | ⬜ 待做（要 App ID/Secret，还要对着真机微调卡片排版）|
 
@@ -57,10 +58,12 @@ app/
   mqtt_client.py   # paho-mqtt 适配器：订阅 ac/state、ac/status，发布 ac/cmd
   state.py         # AcState / Presence：夹取、动作应用、批量合并、内容指纹
   actions.py       # 回调归一化：按钮 action.value 与下拉 action.option → (a, v)
+  intent.py        # 文本 → Intent（纯函数：分词、词表、否定、兜底）
+  replies.py       # Intent + 当前状态 → 回执文案（纯函数）
   cards.py         # 卡片 JSON 构造（纯函数；可 --print-card 直接看）
-  feishu_client.py # 长连接 + 发卡 / 更新卡
-  store.py         # SQLite：owner ↔ 卡片 message_id
-tests/             # 78 项单测，零外部依赖（不需要 broker、凭据或网络）
+  feishu_client.py # 长连接 + 发卡 / 更新卡 / 回文本
+  store.py         # SQLite：owner ↔ 卡片 message_id、已处理消息去重
+tests/             # 139 项单测，零外部依赖（不需要 broker、凭据或网络）
 deploy/            # mosquitto-ac.conf（✅ 已部署）、ac-bot.service
 docs/              # interface-spec.md（契约）、mqtt-bringup.md（MQTT 验证）、feishu-setup.md（建应用清单）
 ```
@@ -79,9 +82,32 @@ cp .env.example .env
 python -m app.main
 ```
 
-设计上刻意让**纯逻辑与 I/O 分开**：`state.py` / `cards.py` / `actions.py` / `store.py`
-不依赖 MQTT 或飞书，所以点按钮的逻辑（夹取、去抖合并、回调归一化、卡片结构）
-能在本机毫秒级验证；`mqtt_client.py` / `feishu_client.py` 只是薄适配器。
+设计上刻意让**纯逻辑与 I/O 分开**：`state.py` / `cards.py` / `actions.py` / `intent.py` /
+`replies.py` / `store.py` 不依赖 MQTT 或飞书，所以点按钮**或发一句话**的逻辑（夹取、去抖合并、
+回调归一化、分词、回执文案、卡片结构）能在本机毫秒级验证；`mqtt_client.py` / `feishu_client.py`
+只是薄适配器。
+
+## 文本控制
+
+私聊里直接发中文，和点卡片**完全等价** —— 解析出来的还是 `(action, value)`，进同一个动作队列，
+所以去抖、乐观更新、确认超时都不用重写。
+
+```
+开机制冷24度      →  ✅ 已开机 · 制冷 · 24℃ · 自动风
+调低两度          →  ✅ 已开机 · 制冷 · 22℃ · 自动风
+风速最大          →  ✅ 已开机 · 制冷 · 22℃ · 高风
+状态              →  现在 开机 · 制冷 · 22℃ · 高风 · 🟢 在线（更新于 12:03:41）
+不要制冷          →  好，模式没动
+太热了            →  看着有点热？说「制冷 22 度」，或点卡片上的「制冷」。   ← 只建议，不执行
+```
+
+- **规则解析，不接 LLM**：只认空调真实具备的说法，听不懂就回「没听懂这句」+ 语法清单，绝不猜。
+- **形容词句永不执行**（`太热了` / `有点冷`）：温度该降 1 还是 3、要不要切制冷，只有你知道。
+  说清动作（`制冷22度`）就照做，`太热了，制冷22度` 也照做。
+- **问句优先**：以 `吗`/`呢` 结尾或含 `状态` 一律当查询 —— `开着吗` 里那个 `开` 不会变成开机。
+- 完整词表、分派顺序、回执格式见 [`docs/interface-spec.md`](docs/interface-spec.md) §5.6；
+  设计与取舍见 [`docs/superpowers/specs/2026-10-13-feishu-text-control-design.md`](docs/superpowers/specs/2026-10-13-feishu-text-control-design.md)。
+- 不想要这个功能：`TEXT_CONTROL_ENABLED=false`，回到「只有 `/ac` 有反应」。
 
 ## MQTT 契约速览
 
@@ -118,7 +144,9 @@ python -m app.main
 3. **首次联调**（预计要来回几轮）：
    - 对着真机微调卡片排版（`column_set` 的宽度、按钮换行）；
    - 确认下拉 `select_static` 的回调确实走 `action.option`；
-   - 走一遍 [`feishu-setup.md`](docs/feishu-setup.md) §10 的 7 条验收清单。
+   - 确认应用开了**发消息 / 回复消息**权限，否则文本回执发不出去（长连接收得到 ≠ 回得了）；
+   - 走一遍 [`feishu-setup.md`](docs/feishu-setup.md) §10 的 7 条验收清单；
+   - 走一遍文本控制的 13 条真机验收清单（设计文档 §8）。
 4. 收紧 MQTT 鉴权：`allow_anonymous` → 账号 + ACL，**两边一起改**。
 
 ## 说明与限制

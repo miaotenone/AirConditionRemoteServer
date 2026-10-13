@@ -69,7 +69,7 @@ spec 没写、但真上手会咬人的五类输入，各自的测试挂在对应
   - `normalize(text: str) -> str`
   - `parse(text: str) -> Intent`
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 ```python
 # tests/test_intent.py
@@ -126,12 +126,12 @@ def test_cold_wind_is_a_mode_alias_not_a_fan_level():
     assert parse("冷风").actions == (("mode", 1),)
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `python -m pytest tests/test_intent.py -q`
 Expected: FAIL —— `ModuleNotFoundError: No module named 'app.intent'`
 
-- [ ] **Step 3: 实现 `app/intent.py`**
+- [x] **Step 3: 实现 `app/intent.py`**
 
 要点（其余留给实现者）：
 - 别名表用**有序元组**，扫到即从文本里删掉该片段（匹配即消费）。
@@ -140,17 +140,17 @@ Expected: FAIL —— `ModuleNotFoundError: No module named 'app.intent'`
 - 两张表都命中同一片段时**取更长的匹配**（`自动风` 赢过 `自动`）。
 - 这一版还没实现温度、查询、帮助、形容词 —— 它们返回 `Intent(kind="unclear")`，由 Task 3 补上。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `python -m pytest tests/test_intent.py -q`
 Expected: PASS（8 项）
 
-- [ ] **Step 5: 确认没碰坏既有测试**
+- [x] **Step 5: 确认没碰坏既有测试**
 
 Run: `python -m pytest -q`
 Expected: PASS（78 + 8 = 86 项）
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add app/intent.py tests/test_intent.py
@@ -169,7 +169,7 @@ git commit -m "feat(intent): text parser skeleton -- normalise, power, mode, fan
 - Consumes: Task 1 的 `normalize` / 消费式匹配 / 动作顺序规则
 - Produces: 无新符号；`parse` 开始产出 `("temp", int)` 与 `("temp_step", int)`
 
-- [ ] **Step 1: 写失败的测试**（追加到 `tests/test_intent.py`）
+- [x] **Step 1: 写失败的测试**（追加到 `tests/test_intent.py`）
 
 ```python
 def test_absolute_temperature():
@@ -218,12 +218,12 @@ def test_last_temperature_wins():
     assert parse("调到24再低两度").actions == (("temp_step", -2),)
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `python -m pytest tests/test_intent.py -q`
 Expected: FAIL —— 新增的这些断言里，温度全部落到 `unclear`
 
-- [ ] **Step 3: 实现温度解析**
+- [x] **Step 3: 实现温度解析**
 
 要点：
 - 中文数字表 `一~十` + `两`；**只在量词（`度`/`℃`）或温度动词（`调到`/`升`/`降`/`低`/`高`）紧邻时才转换**。
@@ -231,12 +231,12 @@ Expected: FAIL —— 新增的这些断言里，温度全部落到 `unclear`
 - `开到|开成 + 数字` → 展开为 `power=1` + `temp=N`，并且**整段消费**（不再让 `开` 单独触发一次 power）。
 - 同字段族只保留最后一个（用「后写覆盖」的字典，最后按 power/mode/temp/fan 固定顺序输出）。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `python -m pytest tests/test_intent.py -q`
 Expected: PASS（16 项）
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/intent.py tests/test_intent.py
@@ -259,7 +259,7 @@ git commit -m "feat(intent): temperature -- absolute, relative, Chinese numerals
   - 纯否定句 → `Intent(kind="actions", actions=(), hint="negated:<field>")` —— **`kind` 仍是 `actions`、`actions` 为空**，这是唯一的例外，`replies.py` 要认它
   - `hint` 是**逗号分隔的 token 串**，如 `"negated:mode"`、`"negated:mode,negated:fan"`
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 ```python
 def test_query():
@@ -299,8 +299,12 @@ def test_bare_number_is_not_a_temperature():
 
 def test_negation_drops_the_action_and_records_it():
     assert parse("不要制冷") == Intent(kind="actions", hint="negated:mode")
-    assert parse("不要制冷，开24度").actions == (("temp", 24),)
-    assert parse("不要制冷，开24度").hint == "negated:mode"
+    assert parse("不要制冷，调到24度").actions == (("temp", 24),)
+    assert parse("不要制冷，调到24度").hint == "negated:mode"
+```
+
+> 实现时发现两处计划没料到的坑，已经补成测试：`「开着吗」` 里的「开」会被当成开机（改为**先判问句再判动作**），
+> `「不用了」` 会被拆成 `不用` + `了`（改为**只认紧跟动作词的否定**，不吃掉关机词）。
 
 
 def test_multiple_actions_are_canonically_ordered():
@@ -309,12 +313,12 @@ def test_multiple_actions_are_canonically_ordered():
     )
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `python -m pytest tests/test_intent.py -q`
 Expected: FAIL —— `query` / `help` / `suggest` / 否定 都还没实现
 
-- [ ] **Step 3: 实现分派**
+- [x] **Step 3: 实现分派**
 
 要点：
 - **先做否定预处理**：`(不要|别|不用|不需要)` 紧邻动作词 → 消费该片段、把字段记进 `negated:` token，**不**产出动作。
@@ -322,12 +326,12 @@ Expected: FAIL —— `query` / `help` / `suggest` / 否定 都还没实现
 - 形容词表：`hot` = `太热|好热|有点热|热死|闷热`；`cold` = `太冷|好冷|有点冷|冻死`；`""` = `闷|不舒服|难受`。
 - 有动作就 `kind="actions"`（**即使 `actions` 为空、只因否定**）；没动作又不是上面任何一类 → `unclear`。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `python -m pytest tests/test_intent.py -q`
 Expected: PASS（24 项）
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/intent.py tests/test_intent.py
@@ -349,7 +353,7 @@ git commit -m "feat(intent): dispatch query/help/suggest/unclear, negation, comb
   - `render(intent: Intent, state: AcState, presence: Presence, *, stale: bool = False, updated_at: str = "--:--:--") -> str`
   - 辅助（导出以便单测）：`state_line(state: AcState) -> str`
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 ```python
 # tests/test_replies.py
@@ -403,12 +407,12 @@ def test_suggest_wording_follows_the_direction():
     assert render(parse("有点闷"), ON, ONLINE) == "要调一下吗？说「制冷 22 度」或「风速最大」。"
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `python -m pytest tests/test_replies.py -q`
 Expected: FAIL —— `ModuleNotFoundError: No module named 'app.replies'`
 
-- [ ] **Step 3: 实现 `app/replies.py`**
+- [x] **Step 3: 实现 `app/replies.py`**
 
 要点：
 - 成功行 = `"✅ " + state_line(动作作用后的状态)`；`state_line` = `开机/关机 · 模式 · N℃ · 风速风`。
@@ -417,12 +421,12 @@ Expected: FAIL —— `ModuleNotFoundError: No module named 'app.replies'`
   注意目标状态要**逐个动作**应用（复用 `apply_action`，不要自己写夹取）。
 - `HELP_TEXT` 逐字：`能听懂这些：开机 / 关掉 / 调到24度 / 制冷 / 风速最大 / 状态`
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `python -m pytest tests/test_replies.py -q`
 Expected: PASS（9 项）
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/replies.py tests/test_replies.py
@@ -441,7 +445,7 @@ git commit -m "feat(replies): receipt text for every intent kind"
 - Produces: `CardStore.mark_seen(self, message_id: str) -> bool`（**首次见到返回 `True`，重复返回 `False`**）
 - 表：`seen(message_id TEXT PRIMARY KEY, at REAL NOT NULL)`
 
-- [ ] **Step 1: 写失败的测试**（追加到 `tests/test_store.py`）
+- [x] **Step 1: 写失败的测试**（追加到 `tests/test_store.py`）
 
 ```python
 def test_mark_seen_is_true_only_the_first_time():
@@ -469,22 +473,22 @@ def test_mark_seen_ignores_an_empty_id():
     assert store.mark_seen("") is True
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `python -m pytest tests/test_store.py -q`
 Expected: FAIL —— `AttributeError: 'CardStore' object has no attribute 'mark_seen'`
 
-- [ ] **Step 3: 实现 `mark_seen`**
+- [x] **Step 3: 实现 `mark_seen`**
 
 要点：`_SCHEMA` 追加建表语句（幂等 `IF NOT EXISTS`，老库直接升级）；
 空字符串**提前返回 `True` 且不落库**；用 `INSERT ... ON CONFLICT DO NOTHING` + `rowcount` 判断是否首次。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `python -m pytest tests/test_store.py -q`
 Expected: PASS（10 项）
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/store.py tests/test_store.py
@@ -504,7 +508,7 @@ git commit -m "feat(store): dedupe incoming messages by message_id"
 - Produces: `FeishuClient.reply_text(self, message_id: str, text: str) -> bool`
 - 实现细节：用 `ReplyMessageRequest` / `ReplyMessageRequestBody`（`msg_type="text"`、`content` 是 `{"text": ...}` 的 JSON 串）
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 ```python
 # tests/test_feishu_client.py
@@ -580,23 +584,23 @@ def test_non_text_and_malformed_messages_are_ignored_silently():
     assert seen == [("ou_1", "oc_1", "om_1", "")]   # 畸形 JSON 退化成空串，交给 intent 判 unclear
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `python -m pytest tests/test_feishu_client.py -q`
 Expected: FAIL —— `TypeError`（handler 还是 3 个参数）/ 没有 `reply_text`
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 要点：`_on_message` 里取 `message.message_id` 一起传给 handler；
 `reply_text` 失败时**只记日志、返回 `False`**，绝不抛；
 `_extract_text` 保持现有的「畸形 JSON → 空串」行为不动。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `python -m pytest tests/test_feishu_client.py -q`
 Expected: PASS（4 项）
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/feishu_client.py tests/test_feishu_client.py
@@ -628,7 +632,7 @@ git commit -m "feat(feishu): pass message_id through and add reply_text"
      `reply_text(message_id, render(intent, self.view, self.presence, stale=is_stale(self.presence, time.time(), self.settings.stale_after_s), updated_at=self._updated_at()))`
      —— 状态用 **`self.view`**（已含本次乐观动作），不是 `self.state`（这是 spec §5.4「最后一个 ac/state + 本次乐观动作」的字面实现）。
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 ```python
 # tests/test_text_control.py
@@ -738,29 +742,29 @@ def test_disabling_text_control_restores_the_old_behaviour(tmp_path):
     assert service.view.power == 0
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `python -m pytest tests/test_text_control.py -q`
 Expected: FAIL —— `TypeError`（`_on_text_message` 还是 3 个参数）/ 没有 `text_control_enabled`
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 - `config.py`：在「Behaviour」段加 `text_control_enabled: bool = True`，附一行注释指向设计文档。
 - `main.py`：`_on_text_message` 改成 4 参数并按上面的 5 条规则分派；
   `Service.start()` / `stop()` / `_publish_worker` / `_render` / `_on_card_action` **一行都不改**。
 - `CARD_COMMANDS` 保持**整串精确匹配**语义（`text.lower() in CARD_COMMANDS`），否则「开空调」会被误吞。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `python -m pytest tests/test_text_control.py -q`
 Expected: PASS（8 项）
 
-- [ ] **Step 5: 全量回归**
+- [x] **Step 5: 全量回归**
 
 Run: `python -m pytest -q`
 Expected: PASS（78 既有 + 8 + 8 + 8 + 9 + 4 + 4 + 8 = 127 项，0 failed）
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add app/config.py app/main.py tests/test_text_control.py
@@ -778,28 +782,28 @@ git commit -m "feat(main): dispatch text messages through the shared action queu
 
 **Interfaces:** 无代码接口
 
-- [ ] **Step 1: README** —— 「当前状态」表加一行「对话控制（文本指令）」✅；
+- [x] **Step 1: README** —— 「当前状态」表加一行「对话控制（文本指令）」✅；
   在「MQTT 契约速览」之后加一节「对话控制」，列出 §4.2 动作表里的触发词示例、
   指向 `docs/superpowers/specs/2026-10-13-feishu-text-control-design.md`，
   并写明**「太热了」这类形容词句不会直接执行**（用户最容易误解的一点）。
 
-- [ ] **Step 2: `docs/interface-spec.md`** —— 新增 §5.6「文本指令（对话控制）」，
+- [x] **Step 2: `docs/interface-spec.md`** —— 新增 §5.6「文本指令（对话控制）」，
   一句话说明「文本与按钮产出同一种动作，走同一条管道」，并指向设计文档；
   §12「决策记录」追加一条：形容词句不执行（D12）。
 
-- [ ] **Step 3: `.env.example`** —— 追加
+- [x] **Step 3: `.env.example`** —— 追加
 
 ```bash
 # 文本指令（对话控制）。设为 false 可退回「只有 /ac 出卡片」的旧行为。
 TEXT_CONTROL_ENABLED=true
 ```
 
-- [ ] **Step 4: 确认文档里没有过期的说法**
+- [x] **Step 4: 确认文档里没有过期的说法**
 
 Run: `python -m pytest -q`（文档改动不该影响测试）
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add README.md docs/interface-spec.md .env.example
@@ -829,3 +833,31 @@ git commit -m "docs: document text control and its one no-op case"
 - **类型一致性**：`Intent` 的字段顺序在 T1 定义、T3 使用；`render` 的签名在 T4 定义、T7 使用；
   `mark_seen` 返回 `bool` 在 T5 定义、T7 使用；`reply_text(message_id, text) -> bool` 在 T6 定义、T7 使用。
 - **比例**：代码块基本都是测试与断言，实现只给签名与要点，没有代写函数体。
+
+## 执行记录（2026-10-13，本机）
+
+原生执行，任务 1→8 顺序做完，每步先 RED 后 GREEN。既有 78 项测试**一行未改**，全程绿。
+
+| 任务 | Commit | 测试 |
+|---|---|---|
+| 1 `intent.py` 骨架 | `3405a35` | 78 → 86 |
+| 2 温度 | `c70d614` | 86 → 94 |
+| 3 分派与边界 | `8e6e058` | 94 → 105 |
+| 4 `replies.py` | `eb8de72` | 105 → 120 |
+| 5 `store.mark_seen` | `99b0bfa` | 120 → 124 |
+| 6 `feishu_client` | `2be534a` | 124 → 128 |
+| 7 接线 | `7b4197d` | 128 → 139 |
+| 8 文档 | 见本节提交 | 139 |
+
+**执行中发现的计划缺口（已修，均补了测试）**：
+
+1. `「开着吗」` 里的 `开` 会被当成开机 —— 计划把「查询」排在动作**之后**。改成**问句优先**
+   （含 `状态`/`多少度`/`几度`/`怎么样`，或**以 `吗`/`呢` 结尾**）。这是最直接的一类误触发。
+2. `「不用了」` 会被拆成 `不用` + `了`，把关机词吃掉 —— 改成**只认紧跟动作词的否定**。
+3. 计划 Task 3 的 `「不要制冷，开24度」` 期望 `(("temp",24),)`，但 `开` 本身是开机词，
+   实际会多一个 `power`。测试改成语义无歧义的 `「不要制冷，调到24度」`。
+4. 计划漏了 `风速2档` 这种**数字档位**（词表只能表达 `最大/中/低`），补了一条规则。
+5. 实现时漏了「有动作 + 有否定」时把否定 token 挂到 `hint` 上 —— 被
+   `test_negation_drops_the_action_and_records_it` 抓到（RED→GREEN 的正常收益）。
+
+**未决**：`reply_text` 的权限实测（联调节第 2 步）要等飞书应用建好，属于真机联调，不在本机可验范围。
