@@ -29,6 +29,14 @@ def test_the_lower_bound_is_explained_too():
         "✅ 已开机 · 制冷 · 16℃ · 自动风（温度范围 16~30）"
 
 
+def test_a_clamped_relative_step_is_explained_too():
+    # 「调低99度」同样被夹了，不能只对绝对温度说
+    assert render(parse("调低99度"), ON, ONLINE) == \
+        "✅ 已开机 · 制冷 · 16℃ · 自动风（温度范围 16~30）"
+    assert render(parse("升99度"), ON, ONLINE) == \
+        "✅ 已开机 · 制冷 · 30℃ · 自动风（温度范围 16~30）"
+
+
 def test_setting_temperature_while_off_is_flagged():
     assert render(parse("调到24度"), OFF, ONLINE) == \
         "✅ 已关机 · 制冷 · 24℃ · 自动风（当前关机，开机后生效）"

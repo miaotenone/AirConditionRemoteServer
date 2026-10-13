@@ -53,6 +53,24 @@ def _apply_all(state: AcState, actions: tuple[tuple[str, int], ...]) -> AcState:
     return result
 
 
+def _temperature_clamped(intent: Intent, before: AcState) -> bool:
+    """Did the temperature part of the command get clamped by the range check?
+
+    Mirrors `apply_action`: an absolute `temp` replaces the value, a `temp_step`
+    moves it. Parsing leaves at most one of the two, but this mirrors the
+    pipeline instead of assuming that -- and it has to cover `temp_step`,
+    because "调低99度" gets clamped just as hard as "调到99度".
+    """
+    target = before.temp
+    changed = False
+    for action, value in intent.actions:
+        if action == "temp":
+            target, changed = value, True
+        elif action == "temp_step":
+            target, changed = target + value, True
+    return changed and clamp_temp(target) != target
+
+
 def _modifiers(intent: Intent, before: AcState, after: AcState,
                presence: Presence) -> list[str]:
     """Reasons the receipt must not be read as a plain "done".
@@ -61,10 +79,7 @@ def _modifiers(intent: Intent, before: AcState, after: AcState,
     """
     notes: list[str] = []
 
-    if any(
-        action == "temp" and clamp_temp(value) != value
-        for action, value in intent.actions
-    ):
+    if _temperature_clamped(intent, before):
         notes.append(f"温度范围 {TEMP_MIN}~{TEMP_MAX}")
 
     refused = _negated_fields(intent.hint)

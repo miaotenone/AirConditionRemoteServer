@@ -77,8 +77,12 @@ def test_relative_temperature_with_chinese_numbers():
 
 
 def test_chinese_number_needs_a_measure_word():
-    # 「一直」里的「一」不能被当成数字（设计 4.1 第 3 条）——只剩「开」触发的 power
-    assert parse("一直开着").actions == (("power", 1),)
+    # 「一直」里的「一」不能被当成数字（设计 4.1 第 3 条）。整句既没有温度也没有动作：
+    # 单字「开」被夹在句子中间时不算命令（防误触发，见
+    # test_chat_that_merely_contains_a_power_character_is_not_a_command）。
+    assert parse("一直开着").kind == "unclear"
+    assert parse("一直开着").actions == ()
+    assert parse("降低一度").actions == (("temp_step", -1),)
 
 
 def test_kaidao_carries_power_and_temperature_exactly_once():
@@ -190,3 +194,83 @@ def test_full_width_input_is_parsed_like_half_width():
 def test_low_two_degrees_without_the_diao_prefix():
     # 设计 7 逐字点名的例子
     assert parse("低两度").actions == (("temp_step", -2),)
+
+
+def test_chat_that_merely_contains_a_power_character_is_not_a_command():
+    # 反目标 1.4（随便说句话就把空调动了）。裸「开/关/停」只有当整句以它收尾
+    # （可带语气词），或后面紧跟一个真动作时才算命令。
+    for text in ("没关系", "开心", "开始吧", "开门", "关灯", "停车",
+                 "开关灯", "关注一下", "开个玩笑", "关灯吧啦"):
+        assert parse(text).kind == "unclear", text
+        assert parse(text).actions == (), text
+
+
+def test_words_that_also_mean_something_else_need_an_ac_context():
+    # 这些词在普通话里到处都是，只有对着空调说才算命令
+    for text in ("打开心扉", "打开窗户", "打开电视", "关闭窗口", "雨停了", "风停了"):
+        assert parse(text).kind == "unclear", text
+        assert parse(text).actions == (), text
+    # 加上空调语境（称呼 / 设备名 / 后面紧跟真动作）就恢复成命令
+    assert parse("打开空调").actions == (("power", 1),)
+    assert parse("关闭空调").actions == (("power", 0),)
+    assert parse("把空调打开").actions == (("power", 1),)
+    assert parse("空调停了").actions == (("power", 0),)
+
+
+def test_bare_power_words_still_work_on_their_own():
+    assert parse("开").actions == (("power", 1),)
+    assert parse("关").actions == (("power", 0),)
+    assert parse("停").actions == (("power", 0),)
+    assert parse("开！").actions == (("power", 1),)
+    assert parse("冷了").kind == "unclear"
+
+
+def test_bare_power_word_with_trailing_particles_still_works():
+    assert parse("关了").actions == (("power", 0),)
+    assert parse("开吧").actions == (("power", 1),)
+    assert parse("开着").actions == (("power", 1),)
+    assert parse("空调关了").actions == (("power", 0),)
+
+
+def test_bare_power_word_before_a_real_action_still_works():
+    assert parse("开制冷24度").actions == (("power", 1), ("mode", 1), ("temp", 24))
+    assert parse("关空调").actions == (("power", 0),)
+    assert parse("开到最大风").actions == (("power", 1), ("fan", 3))
+
+
+def test_a_relative_step_needs_a_measure_word():
+    # 「身高180」「血压高140」不能被读成升/降温
+    for text in ("身高180", "血压高140", "热18", "冷3", "高140"):
+        assert parse(text).kind == "unclear", text
+        assert parse(text).actions == (), text
+
+
+def test_a_relative_step_with_a_measure_word_still_works():
+    assert parse("冷3度").actions == (("temp_step", -3),)
+    assert parse("高2度").actions == (("temp_step", 2),)
+    assert parse("调低").actions == (("temp_step", -1),)
+    assert parse("调高").actions == (("temp_step", 1),)
+    assert parse("调低一点").actions == (("temp_step", -1),)
+
+
+def test_adjacent_chinese_digits_do_not_crash():
+    # _NUMBER 贪婪匹配连续的汉字数字，「两三度」是一整块 —— 不能抛异常
+    assert parse("调低两三度").actions == (("temp_step", -2),)
+    assert parse("调到十度").actions == (("temp", 10),)
+
+
+def test_a_temp_verb_does_not_swallow_a_fan_step():
+    # 设计 4.3：档 / 档位 / 风 把数字绑到风速，即使前面有温度动词
+    assert parse("调到2档").actions == (("fan", 2),)
+    assert parse("设成2档").actions == (("fan", 2),)
+    assert parse("风速调到2档").actions == (("fan", 2),)
+    assert parse("开到2档").actions == (("power", 1), ("fan", 2),)
+
+
+def test_a_polite_command_is_still_a_command():
+    # 别把「开空调好吗」吞成一次状态查询 —— 只有「…了吗/了呢」才是问状态
+    assert parse("开空调好吗").actions == (("power", 1),)
+    assert parse("调到24度好吗").actions == (("temp", 24),)
+    assert parse("帮我开一下好吗").actions == (("power", 1),)
+    assert parse("开机了吗").kind == "query"
+    assert parse("关机了吗").kind == "query"
