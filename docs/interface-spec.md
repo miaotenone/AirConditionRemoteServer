@@ -326,6 +326,7 @@ class Presence:
 | `MQTT_PREFIX` | topic 前缀，须与固件一致 | `ac` |
 | `OWNER_OPEN_ID` | 允许控制的唯一用户 open_id（私聊单用户） | （必填） |
 | `LOG_LEVEL` | 日志级别 | `INFO` |
+| `FEISHU_LOG_LEVEL` | 仅长连接 socket 的日志级别；`DEBUG` 可看到原始 WS 收发包 | `INFO` |
 
 ---
 

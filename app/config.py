@@ -34,6 +34,11 @@ class Settings(BaseSettings):
 
     # --- Behaviour ---
     log_level: str = "INFO"
+    #: Verbosity of the lark-oapi long-connection *socket*, independent of
+    #: `log_level`. "DEBUG" dumps raw WS traffic, which is how you tell
+    #: "Feishu sent nothing" apart from "the SDK received it but did not
+    #: route it to our handler". Leave it at INFO unless debugging.
+    feishu_log_level: str = "INFO"
     #: Rapid taps inside this window collapse into one `ac/cmd` (spec 5.5).
     debounce_ms: int = 400
     #: No `ac/state` back within this long -> card shows "⚠️ 未确认" (spec 10).

@@ -80,6 +80,7 @@ class Service:
             app_secret=settings.feishu_app_secret.get_secret_value(),
             on_action=self._on_card_action,
             on_text=self._on_text_message,
+            log_level=settings.feishu_log_level,
         )
 
     # ------------------------------------------------------------------ startup

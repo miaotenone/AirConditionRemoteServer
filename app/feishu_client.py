@@ -48,11 +48,13 @@ class FeishuClient:
 
     def __init__(self, *, app_id: str, app_secret: str,
                  on_action: Optional[ActionHandler] = None,
-                 on_text: Optional[TextHandler] = None) -> None:
+                 on_text: Optional[TextHandler] = None,
+                 log_level: str = "INFO") -> None:
         self._app_id = app_id
         self._app_secret = app_secret
         self.on_action = on_action
         self.on_text = on_text
+        self._log_level = log_level
         self._api = lark.Client.builder().app_id(app_id).app_secret(app_secret).build()
         self._thread: Optional[threading.Thread] = None
 
@@ -106,7 +108,7 @@ class FeishuClient:
             self._app_id,
             self._app_secret,
             event_handler=handler,
-            log_level=lark.LogLevel.INFO,
+            log_level=_lark_log_level(self._log_level),
         )
         self._thread = threading.Thread(
             target=client.start, name="feishu-long-connection", daemon=True
@@ -152,6 +154,11 @@ class FeishuClient:
         except Exception:  # noqa: BLE001
             log.exception("message handler failed")
         return None
+
+
+def _lark_log_level(name: str):
+    """Map a plain level name onto the lark enum; anything odd means INFO."""
+    return lark.LogLevel.DEBUG if str(name).upper() == "DEBUG" else lark.LogLevel.INFO
 
 
 def _dump(card: dict) -> str:

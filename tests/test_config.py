@@ -43,6 +43,7 @@ def test_defaults_match_the_spec():
     assert settings.mqtt_user == ""
     assert settings.mqtt_prefix == "ac"
     assert settings.log_level == "INFO"
+    assert settings.feishu_log_level == "INFO"
 
 
 def test_missing_required_settings_are_rejected(monkeypatch):
