@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     confirm_timeout_s: float = 5.0
     #: Online but silent for longer than this -> soft "may be stale" note (spec 10).
     stale_after_s: float = 90.0
+    #: Understand plain text ("调低两度") as a command, not just "/ac".
+    #: Design: docs/superpowers/specs/2026-10-13-feishu-text-control-design.md.
+    #: Set false to fall back to "only /ac posts the card".
+    text_control_enabled: bool = True
     db_path: str = "ac-bot.sqlite3"
 
     @property

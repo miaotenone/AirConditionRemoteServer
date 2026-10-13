@@ -23,7 +23,9 @@ from .actions import normalize_action
 from .cards import build_card
 from .config import Settings
 from .feishu_client import FeishuClient
+from .intent import parse
 from .mqtt_client import MqttBridge
+from .replies import render
 from .state import (
     AcState,
     Presence,
@@ -120,13 +122,65 @@ class Service:
 
     # ----------------------------------------------------------- Feishu inbound
 
-    def _on_text_message(self, open_id: str, chat_id: str, text: str) -> None:
+    def _on_text_message(self, open_id: str, chat_id: str,
+                         message_id: str, text: str) -> None:
+        """Text is just another way to press a button.
+
+        The parsed actions go into the *same* queue the card uses, so the
+        debounce window, the optimistic update and the confirmation timeout are
+        inherited rather than reimplemented (design 2).
+        """
         if not self._is_owner(open_id):
             return
+
+        if not self.settings.text_control_enabled:
+            self._plain_text_fallback(chat_id, text)
+            return
+
+        if not self.store.mark_seen(message_id):
+            log.info("ignoring redelivered message %s", message_id)
+            return
+
+        if text.lower() in CARD_COMMANDS:
+            self._send_or_refresh_card(chat_id)     # "/ac" literally means "the card"
+            return
+
+        intent = parse(text)
+
+        if intent.actions:
+            with self._lock:
+                for action, value in intent.actions:
+                    self.view = apply_action(self.view, action, value)
+                    self._actions.put((action, value))
+                self.pending = True
+
+        self._ensure_card(chat_id)
+        self._render()
+
+        with self._lock:
+            receipt = render(
+                intent, self.view, self.presence,
+                stale=is_stale(self.presence, time.time(), self.settings.stale_after_s),
+                updated_at=self._updated_at(),
+            )
+        self.feishu.reply_text(message_id, receipt)
+
+    def _plain_text_fallback(self, chat_id: str, text: str) -> None:
+        """The pre-text-control behaviour, kept for `TEXT_CONTROL_ENABLED=false`."""
         if text.lower() in CARD_COMMANDS:
             self._send_or_refresh_card(chat_id)
         else:
             log.info("ignoring message %r; send one of %s for the card", text, CARD_COMMANDS)
+
+    def _ensure_card(self, chat_id: str) -> None:
+        """Post the remote once, so a text-only user still has something to fix.
+
+        Only ever creates: once the message_id is remembered, every later update
+        is an in-place patch (design 5.2).
+        """
+        if self.store.get_message_id(self.settings.owner_open_id):
+            return
+        self._send_or_refresh_card(chat_id)
 
     def _on_card_action(self, open_id: str, chat_id: str, message_id: str,
                         value, option) -> None:
