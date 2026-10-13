@@ -71,19 +71,32 @@
 
 ## 8. 拿 `OWNER_OPEN_ID`
 
-两种方法，任选：
+**方法 A（推荐，零配置、零额外权限）：让服务自己告诉你**
 
-**方法 A（推荐，零配置）：**
-1. 先把 `.env` 里的 `OWNER_OPEN_ID` **留空**，启动服务。
-2. 在飞书里给机器人发一句话。
-3. 看日志，会有一行：
+1. 把 `.env` 里的 `OWNER_OPEN_ID` 写成**空值** —— 是 `OWNER_OPEN_ID=`（键留着），
+   **不要删掉整行**：字段是必填的，删了会 `ValidationError ... owner_open_id Field required`。
+2. 启动服务：`python -m app.main`。
+3. 在飞书里给机器人发一句话（或者点一下卡片上的按钮）。
+4. 日志里会出现一行（`LOG_LEVEL=INFO` 就能看到）：
    ```
-   WARNING app.main: ignoring event from non-owner 'ou_xxxxxxxxxxxxxxxxxxxx'
+   2026-10-13 21:04:33 WARNING app.main: ignoring event from non-owner 'ou_3f8a1b2c3d4e5f6a7b8c9d0e1f2a3b4c'
    ```
-   （或者 `card action from ou_...`）
-4. 把这个 `ou_...` 填进 `.env` 的 `OWNER_OPEN_ID`，重启服务。
+   引号里那串 `ou_` 开头的就是你的 `open_id`。
+5. 填回 `.env`：`OWNER_OPEN_ID=ou_3f8a1b2c...`，重启服务。
 
-**方法 B：** 用开放平台 API `contact.v3.user.get`，按邮箱/手机号换 `open_id`。
+> 非 owner 的**消息不会得到任何回复**（避免探测，见 `interface-spec.md` §10），所以只能看日志，
+> 别等机器人回你。第 1 步的空值状态是安全的：`_is_owner` 是纯字符串比较，空值谁也匹配不上。
+
+**方法 B（不想起服务）：** 用 `tenant_access_token` 调
+`POST /open-apis/contact/v3/users/batch_get_id`，body `{"emails":["你的邮箱"]}`，
+需要权限 **获取用户 ID**（`contact:user.id:readonly`）。返回里的 `open_id` 就是它。
+
+> ⚠️ **`open_id` 是「按应用」的**：同一个飞书账号，在 A 应用和 B 应用里拿到的 `open_id` 是
+> **两个不同的值**。别从别的应用或别的配置里抄一个过来 —— 必须用**这个应用**给出的值。
+>
+> ⚠️ **Windows 记事本陷阱**：`.env` 若存成「UTF-8 **带 BOM**」，python-dotenv 会把第一行的键读成
+> `\ufeffFEISHU_APP_ID`，于是 `FEISHU_APP_ID` 变成缺失，启动直接报 `feishu_app_id Field required`。
+> 用 VSCode，或存成「UTF-8（无 BOM）」。
 
 ## 9. 填 `.env` 并启动
 
