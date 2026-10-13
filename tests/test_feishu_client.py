@@ -72,3 +72,55 @@ def test_non_text_and_malformed_messages_are_ignored_silently():
     client._on_message(_message(content="not json"))
     # 图片整条丢掉；畸形 JSON 退化成空串，交给 intent 判 unclear
     assert seen == [("ou_9", "oc_9", "om_9", "")]
+
+
+# --------------------------------------------------------------- card clicks
+
+def _card_action(value=None, option=None, operator="ou_9",
+                 chat_id="oc_9", message_id="om_9"):
+    """The shape lark-oapi really hands `_on_card_action`: nested under `event`."""
+    return types.SimpleNamespace(event=types.SimpleNamespace(
+        operator=types.SimpleNamespace(open_id=operator),
+        action=types.SimpleNamespace(value=value, option=option),
+        context=types.SimpleNamespace(
+            open_chat_id=chat_id, open_message_id=message_id),
+    ))
+
+
+def _action_client():
+    seen = []
+    client = FeishuClient(app_id="cli_test", app_secret="secret",
+                          on_action=lambda *args: seen.append(args))
+    return client, seen
+
+
+def test_card_click_is_read_from_the_nested_event_payload():
+    # The SDK wraps the click in `event`. Reading the top level instead made
+    # every click arrive as operator="" / value=None, which the service then
+    # dropped as a non-owner event.
+    client, seen = _action_client()
+    client._on_card_action(_card_action(value={"a": "power", "v": 1}))
+    assert seen == [("ou_9", "oc_9", "om_9", {"a": "power", "v": 1}, None)]
+
+
+def test_temperature_select_reports_through_action_option():
+    client, seen = _action_client()
+    client._on_card_action(_card_action(option="26"))
+    assert seen == [("ou_9", "oc_9", "om_9", None, "26")]
+
+
+def test_unnested_card_payload_still_works():
+    # Fallback: an SDK build that hands the click over flat must not regress.
+    client, seen = _action_client()
+    client._on_card_action(types.SimpleNamespace(
+        operator=types.SimpleNamespace(open_id="ou_9"),
+        action=types.SimpleNamespace(value={"a": "temp", "v": 20}, option=None),
+        context=types.SimpleNamespace(open_chat_id="oc_9", open_message_id="om_9"),
+    ))
+    assert seen == [("ou_9", "oc_9", "om_9", {"a": "temp", "v": 20}, None)]
+
+
+def test_a_broken_click_payload_never_kills_the_socket():
+    client, seen = _action_client()
+    assert client._on_card_action(types.SimpleNamespace(event=None)) is not None
+    assert seen == [("", "", "", None, None)]

@@ -7,9 +7,13 @@ Verified against lark-oapi 1.7.2:
 * ``EventDispatcherHandler.builder("", "").register_p2_card_action_trigger(...)``
   is the callback for card clicks; ``register_p2_im_message_receive_v1`` for
   plain messages. Both are on the *builder*, not the handler class.
-* The click payload exposes ``data.operator.open_id``, ``data.action.value``,
-  ``data.action.option`` and ``data.context.open_chat_id`` /
-  ``data.context.open_message_id``.
+* ``register_p2_card_action_trigger`` hands the handler a
+  ``P2CardActionTrigger`` whose payload is nested under ``event`` (a
+  ``P2CardActionTriggerData``), exactly like a plain message. So the click
+  fields are ``data.event.operator.open_id``, ``data.event.action.value``,
+  ``data.event.action.option``, and ``data.event.context.open_chat_id`` /
+  ``data.event.context.open_message_id``. Reading the top level instead
+  yields a silent all-``None`` click.
 
 The callback must be answered inside ~3 s (spec 5.5), so the handler only
 normalises the click, hands it to the service, and returns immediately. The card
@@ -147,11 +151,16 @@ class FeishuClient:
     def _on_card_action(self, data) -> None:
         """Answer a card click fast; the service does the real work."""
         try:
-            operator = _get(getattr(data, "operator", None), "open_id", "")
-            context = getattr(data, "context", None)
+            # The SDK nests the payload under `event`; keep a fallback to the
+            # flatter shape so an older SDK build degrades to "works" rather
+            # than to a silent all-None click.
+            event = _get(data, "event", None)
+            source = data if event is None else event
+            operator = _get(_get(source, "operator", None), "open_id", "")
+            context = _get(source, "context", None)
             chat_id = _get(context, "open_chat_id", "")
             message_id = _get(context, "open_message_id", "")
-            action = getattr(data, "action", None)
+            action = _get(source, "action", None)
             raw_value = _get(action, "value", None)
             raw_option = _get(action, "option", None)
             log.info("card action from %s: value=%r option=%r", operator, raw_value, raw_option)
