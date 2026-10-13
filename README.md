@@ -14,7 +14,7 @@
 |---|---|
 | MQTT 链路（ESP32 ⇄ Mosquitto ⇄ 树莓派）| ✅ **已完整验证**，见 [`docs/mqtt-bringup.md`](docs/mqtt-bringup.md) |
 | Mosquitto 部署 | ✅ 已装并 `enable`（[`deploy/mosquitto-ac.conf`](deploy/mosquitto-ac.conf)）|
-| 服务本体 `app/` | ✅ 骨架完成；纯逻辑 **139 项单测全绿** |
+| 服务本体 `app/` | ✅ 骨架完成；纯逻辑 **155 项单测全绿** |
 | 文本控制（发中文短句）| ✅ 已实现，见 §「文本控制」；真机验收待做 |
 | 飞书自建应用 / 长连接 | ⬜ 待建 —— 照 [`docs/feishu-setup.md`](docs/feishu-setup.md) 走一遍 |
 | 首次端到端联调 | ⬜ 待做（要 App ID/Secret，还要对着真机微调卡片排版）|
@@ -63,7 +63,7 @@ app/
   cards.py         # 卡片 JSON 构造（纯函数；可 --print-card 直接看）
   feishu_client.py # 长连接 + 发卡 / 更新卡 / 回文本
   store.py         # SQLite：owner ↔ 卡片 message_id、已处理消息去重
-tests/             # 139 项单测，零外部依赖（不需要 broker、凭据或网络）
+tests/             # 155 项单测，零外部依赖（不需要 broker、凭据或网络）
 deploy/            # mosquitto-ac.conf（✅ 已部署）、ac-bot.service
 docs/              # interface-spec.md（契约）、mqtt-bringup.md（MQTT 验证）、feishu-setup.md（建应用清单）
 ```
@@ -104,9 +104,14 @@ python -m app.main
 - **规则解析，不接 LLM**：只认空调真实具备的说法，听不懂就回「没听懂这句」+ 语法清单，绝不猜。
 - **形容词句永不执行**（`太热了` / `有点冷`）：温度该降 1 还是 3、要不要切制冷，只有你知道。
   说清动作（`制冷22度`）就照做，`太热了，制冷22度` 也照做。
-- **问句优先**：以 `吗`/`呢` 结尾或含 `状态` 一律当查询 —— `开着吗` 里那个 `开` 不会变成开机。
+- **问句优先**：含 `状态`/`多少度`/`几度`/`怎么样`，或**以 `了吗`/`了呢`/`了没` 结尾**（`开机了吗`）
+  一律当查询。反过来 `开空调好吗` 是**请求**，照做 —— 只把「…了吗」这种完成态问句当状态查询。
+- **短词上锁**：`开` / `关` / `停` / `打开` / `关闭` / `停了` 只在整句是对空调说的时候才算命令，
+  所以 `没关系`、`开心`、`开关`、`关灯`、`打开心扉`、`雨停了` **都不会动空调**（回「没听懂」）。
+  代价是 `一直开着`、`把窗户关了` 也不动作 —— 这是**故意的**，防误触发优先。
 - 完整词表、分派顺序、回执格式见 [`docs/interface-spec.md`](docs/interface-spec.md) §5.6；
-  设计与取舍见 [`docs/superpowers/specs/2026-10-13-feishu-text-control-design.md`](docs/superpowers/specs/2026-10-13-feishu-text-control-design.md)。
+  设计与取舍（含 18 条决策、7 条已知限制）见
+  [`docs/superpowers/specs/2026-10-13-feishu-text-control-design.md`](docs/superpowers/specs/2026-10-13-feishu-text-control-design.md)。
 - 不想要这个功能：`TEXT_CONTROL_ENABLED=false`，回到「只有 `/ac` 有反应」。
 
 ## MQTT 契约速览
@@ -153,5 +158,8 @@ python -m app.main
 
 - v1 是**私聊单用户**（`OWNER_OPEN_ID`），机器人不拉群、不做多用户、不做多空调、不做定时场景。
 - 能力**只覆盖控制**：状态的真值永远来自 ESP32；空调被实体遥控器改变时，服务只能在下一次对齐后得知。
+- **连发才合并**：三条「调低两度」若**快于** `ac/state` 往返，会合并成一条 `ac/cmd`（降 6℃）；
+  若慢慢打（真值已过期），三条会各自从当时的真值算 —— 这是既有管道（卡片连点也一样）的性质，
+  详见设计文档 §13 已知限制 1。**联调按「连发」测。**
 - 本仓库与固件仓库的 MQTT 契约必须保持一致；改任一侧都要同步另一侧与
   [`docs/interface-spec.md`](docs/interface-spec.md) §4。
