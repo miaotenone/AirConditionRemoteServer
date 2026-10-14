@@ -216,17 +216,27 @@ class Service:
     def _on_mqtt_event(self, payload: dict, retained: bool) -> None:
         """A device-originated event: currently only the fail-safe trip.
 
-        ``ac/event`` is retained with a timestamp, so after a restart we must
-        check the age before acting on it (design 18.8).
+        ``ac/event`` is retained, so after a service restart the broker replays
+        the last one. Both the retain flag and the event's own ``ts`` are
+        checked before acting: a replay is history, not news (design 18.8).
         """
         kind = payload.get("type")
         ts = payload.get("ts")
         if kind != "failsafe_off":
             log.info("ignoring device event %r", kind)
             return
-        if retained or (isinstance(ts, (int, float)) and time.time() - ts > 600):
-            log.info("ignoring stale fail-safe event (ts=%r retained=%s)", ts, retained)
+        if retained:
+            log.info("ignoring retained fail-safe replay")
             return
+        if not isinstance(ts, (int, float)) or ts < 1_000_000_000:
+            # The device withholds events until SNTP has given it a real clock,
+            # so a zero/absent ts means this is not something we can age-check.
+            log.info("ignoring fail-safe event without a usable timestamp (ts=%r)", ts)
+            return
+        if time.time() - ts > 600:
+            log.info("ignoring stale fail-safe event (ts=%r)", ts)
+            return
+
         previous = payload.get("prev") or {}
         log.warning("device fail-safe turned the AC off; previous state %r", previous)
         with self._lock:
@@ -234,6 +244,32 @@ class Service:
             if not self.pending:
                 self.view = replace(self.view, power=0)
         self._render()
+        self._restore_after_failsafe(previous)
+
+    def _restore_after_failsafe(self, previous: dict) -> bool:
+        """Put the AC back the way it was, once we are talking again.
+
+        Only for a unit that was actually *on*: if it was already off, the
+        fail-safe changed nothing and re-sending would be a surprise.
+        """
+        try:
+            if int(previous.get("power", 0)) != 1:
+                return False
+            actions = [(field, int(previous[field]))
+                       for field in ("power", "mode", "temp", "fan")
+                       if field in previous]
+        except (TypeError, ValueError):
+            log.warning("fail-safe event carried an unreadable prev state: %r", previous)
+            return False
+        if not actions:
+            return False
+
+        log.warning("restoring the pre-fail-safe state: %s", actions)
+        self._queue_actions(actions)
+        chat_id = self._chat_id()
+        if chat_id:
+            self.feishu.send_text(chat_id, "🔌 设备失联已自动关机，重新连上后已恢复原先的空调状态")
+        return True
 
     # ----------------------------------------------------------- Feishu inbound
 

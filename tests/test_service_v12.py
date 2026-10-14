@@ -374,6 +374,64 @@ def test_the_daily_weather_push_fires_within_the_minute_window(tmp_path):
     assert pushed == ["oc_1"]
 
 
+# --------------------------------------------------------- device events
+
+def test_a_retained_failsafe_replay_is_ignored(tmp_path):
+    # 设计 18.8：重启后 broker 会重放 retained 的 ac/event，那是历史不是新闻。
+    service = build_service(tmp_path)
+    service._on_mqtt_event({"type": "failsafe_off", "ts": time.time(),
+                            "prev": {"power": 1, "mode": 1, "temp": 24, "fan": 0}},
+                           True)
+    assert service._actions.empty()
+    assert service.view.power == 0          # untouched: still the default
+
+
+def test_a_failsafe_event_without_a_timestamp_is_ignored(tmp_path):
+    # 固件在 NTP 同步之前不会发事件；没有 ts 就没法判断新旧，一律不信。
+    service = build_service(tmp_path)
+    service._on_mqtt_event({"type": "failsafe_off",
+                            "prev": {"power": 1, "mode": 1, "temp": 24, "fan": 0}},
+                           False)
+    assert service._actions.empty()
+
+
+def test_a_stale_failsafe_event_is_ignored(tmp_path):
+    service = build_service(tmp_path)
+    service._on_mqtt_event({"type": "failsafe_off", "ts": time.time() - 3600,
+                            "prev": {"power": 1, "mode": 1, "temp": 24, "fan": 0}},
+                           False)
+    assert service._actions.empty()
+
+
+def test_a_fresh_failsafe_event_restores_the_previous_state(tmp_path):
+    service = build_service(tmp_path)
+    service.store.set_setting("chat_id", "oc_1")
+    service.view = AcState(power=1, mode=AC_MODE["cool"], temp=24, fan=AC_FAN["auto"])
+    service._on_mqtt_event({"type": "failsafe_off", "ts": time.time(),
+                            "prev": {"power": 1, "mode": 1, "temp": 22, "fan": 1}},
+                           False)
+    queued = _queued(service)
+    assert ("power", 1) in queued
+    assert ("temp", 22) in queued
+    assert ("fan", 1) in queued
+    assert service.feishu.sent_text
+
+
+def test_a_failsafe_event_for_an_ac_that_was_off_does_not_reopen_it(tmp_path):
+    # 本来就关机，失联自动关机什么都没改变，不该"恢复"成开机。
+    service = build_service(tmp_path)
+    service._on_mqtt_event({"type": "failsafe_off", "ts": time.time(),
+                            "prev": {"power": 0, "mode": 1, "temp": 24, "fan": 0}},
+                           False)
+    assert service._actions.empty()
+
+
+def test_an_unknown_device_event_is_ignored(tmp_path):
+    service = build_service(tmp_path)
+    service._on_mqtt_event({"type": "something_else", "ts": time.time()}, False)
+    assert service._actions.empty()
+
+
 # ------------------------------------------------------------------ helpers
 
 
