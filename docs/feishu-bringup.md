@@ -142,9 +142,14 @@ for (n,) in c.execute(\"select name from sqlite_master where type='table'\"):
     print(n, c.execute(f'select count(*) from {n}').fetchone()[0])"
 ```
 
-排障提示：**事件原始 payload 在 INFO 级别也会进 journal**（`receive message … payload: {…}`）。
-`FEISHU_LOG_LEVEL` 只控制 **socket 层**（ping/pong）；事件分发层的 payload 日志始终开着，
-所以"到底收到了什么"永远有据可查 —— 这次就是靠它拿到 `chat_id` 与回调结构的。
+排障提示：**事件原始 payload（`receive message … payload: {…}`）只在 `FEISHU_LOG_LEVEL=DEBUG`
+时进 journal**，INFO 级别看不到。2026-10-14 丢的那 4 次点击正好发生在 INFO 时段（00:01–00:04），
+journal 里**一行 payload 都没有**，事后无从回溯 —— 所以排障前先在 `/opt/ac-bot/.env` 里把
+`FEISHU_LOG_LEVEL` 改成 `DEBUG` 并 `systemctl restart ac-bot`（改回 `INFO` 记得再重启）。
+`chat_id` 与回调结构是当时开着 DEBUG 才拿到的。
+补了一层兜底：**字段一个都解不出来的点击，现在会在 WARNING 打出原始报文**
+（`card action payload matched no known shape: {…}`，见设计 §10 D21）——
+最危险的那类故障即使不开 DEBUG 也留得下证据。
 
 ## 7. 已知限制 / 待验项
 
