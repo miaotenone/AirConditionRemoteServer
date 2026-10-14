@@ -147,8 +147,13 @@ class Service:
 
         intent = parse(text)
 
-        if intent.actions:
-            with self._lock:
+        with self._lock:
+            # `render` re-applies the actions itself to show "what it will be";
+            # hand it the state *before* this message or a relative action is
+            # counted twice. On device: ac/cmd {"temp":28} next to a receipt of
+            # 26 (30 -> 28 -> 26). Acceptance #11 wants 22/20/18, not 20/18/16.
+            before = self.view
+            if intent.actions:
                 for action, value in intent.actions:
                     self.view = apply_action(self.view, action, value)
                     self._actions.put((action, value))
@@ -159,7 +164,7 @@ class Service:
 
         with self._lock:
             receipt = render(
-                intent, self.view, self.presence,
+                intent, before, self.presence,
                 stale=is_stale(self.presence, time.time(), self.settings.stale_after_s),
                 updated_at=self._updated_at(),
             )

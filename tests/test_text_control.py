@@ -135,3 +135,16 @@ def test_disabling_text_control_restores_the_old_behaviour(tmp_path):
     assert service.feishu.replies == []
     assert service._actions.empty()
     assert service.view.power == 0
+
+
+def test_relative_steps_are_reported_once_each(tmp_path):
+    # 验收 #11 的回执部分：22/20/18。曾出现过 ac/cmd {"temp":28} 配一条说 26℃
+    # 的回执 —— 回执在动作已应用的视图上又算了一遍 temp_step。
+    service = build_service(tmp_path)
+    for index in range(3):
+        service._on_text_message("ou_test", "oc_1", f"om_{index}", "调低两度")
+    assert [text for _, text in service.feishu.replies] == [
+        "✅ 已关机 · 制冷 · 22℃ · 自动风（当前关机，开机后生效）",
+        "✅ 已关机 · 制冷 · 20℃ · 自动风（当前关机，开机后生效）",
+        "✅ 已关机 · 制冷 · 18℃ · 自动风（当前关机，开机后生效）",
+    ]
