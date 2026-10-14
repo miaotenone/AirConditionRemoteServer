@@ -15,11 +15,13 @@ Two different ideas share this module because they must not be confused
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 #: How late a one-shot job may still fire after a restart (design 18.5).
 DEFAULT_GRACE_S = 900.0
+
+_DAY = timedelta(days=1)
 
 #: Job lifecycle.
 STATUS_PENDING = "pending"
@@ -88,3 +90,38 @@ def is_overdue(run_at: float, now: datetime, grace_s: float = DEFAULT_GRACE_S) -
     breakfast (design 18.5).
     """
     return (now.timestamp() - run_at) > grace_s
+
+
+def night_bounds(now: datetime, start: str, end: str
+                 ) -> Optional[tuple[float, float]]:
+    """Bounds of the most recent night window, or ``None`` if unparseable.
+
+    Handles a window that crosses midnight (23:00~07:00): at 02:00 the bounds
+    are last night's 23:00 to today's 07:00; at noon they are the same window --
+    "the night just gone", which is what both the loop and the history mean.
+    """
+    parsed_start, parsed_end = parse_hhmm(start), parse_hhmm(end)
+    if parsed_start is None or parsed_end is None:
+        return None
+    start_today = now.replace(hour=parsed_start[0], minute=parsed_start[1],
+                              second=0, microsecond=0)
+    end_today = now.replace(hour=parsed_end[0], minute=parsed_end[1],
+                            second=0, microsecond=0)
+
+    if start_today <= end_today:            # same-day window
+        if now >= start_today:
+            return start_today.timestamp(), end_today.timestamp()
+        return (start_today - _DAY).timestamp(), (end_today - _DAY).timestamp()
+
+    if now >= start_today:                  # crosses midnight, we are inside
+        return start_today.timestamp(), (end_today + _DAY).timestamp()
+    return (start_today - _DAY).timestamp(), end_today.timestamp()
+
+
+def in_window(now: datetime, start: str, end: str) -> bool:
+    """True when ``now`` sits inside the current/just-gone night window."""
+    bounds = night_bounds(now, start, end)
+    if bounds is None:
+        return False
+    low, high = bounds
+    return low <= now.timestamp() <= high

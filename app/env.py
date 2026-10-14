@@ -11,15 +11,13 @@ The firmware publishes ``ac/env``; the service records it and answers
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
-from .schedule import parse_hhmm
+from .schedule import night_bounds
 
 #: The windows a history query may ask for (design 18.5).
 WINDOWS = ("current", "tonight", "day", "week", "all")
-
-_DAY = timedelta(days=1)
 
 
 @dataclass(frozen=True)
@@ -86,23 +84,7 @@ def parse_env(payload: dict) -> EnvReading:
 
 def _night_bounds(now: datetime, start: str, end: str) -> Optional[tuple[float, float]]:
     """Bounds of the most recent night window (handles a cross-midnight one)."""
-    parsed_start, parsed_end = parse_hhmm(start), parse_hhmm(end)
-    if parsed_start is None or parsed_end is None:
-        return None
-    start_today = now.replace(hour=parsed_start[0], minute=parsed_start[1],
-                              second=0, microsecond=0)
-    end_today = now.replace(hour=parsed_end[0], minute=parsed_end[1],
-                            second=0, microsecond=0)
-
-    if start_today <= end_today:            # same-day window
-        if now >= start_today:
-            return start_today.timestamp(), end_today.timestamp()
-        return (start_today - _DAY).timestamp(), (end_today - _DAY).timestamp()
-
-    # crosses midnight
-    if now >= start_today:
-        return start_today.timestamp(), (end_today + _DAY).timestamp()
-    return (start_today - _DAY).timestamp(), end_today.timestamp()
+    return night_bounds(now, start, end)
 
 
 def _bounds(window: str, now: datetime, night_start: str,

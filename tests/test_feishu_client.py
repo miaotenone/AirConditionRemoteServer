@@ -77,11 +77,12 @@ def test_non_text_and_malformed_messages_are_ignored_silently():
 # --------------------------------------------------------------- card clicks
 
 def _card_action(value=None, option=None, operator="ou_9",
-                 chat_id="oc_9", message_id="om_9"):
+                 chat_id="oc_9", message_id="om_9", form_value=None, name=None):
     """The shape lark-oapi really hands `_on_card_action`: nested under `event`."""
     return types.SimpleNamespace(event=types.SimpleNamespace(
         operator=types.SimpleNamespace(open_id=operator),
-        action=types.SimpleNamespace(value=value, option=option),
+        action=types.SimpleNamespace(value=value, option=option,
+                                     form_value=form_value, name=name),
         context=types.SimpleNamespace(
             open_chat_id=chat_id, open_message_id=message_id),
     ))
@@ -100,13 +101,23 @@ def test_card_click_is_read_from_the_nested_event_payload():
     # dropped as a non-owner event.
     client, seen = _action_client()
     client._on_card_action(_card_action(value={"a": "power", "v": 1}))
-    assert seen == [("ou_9", "oc_9", "om_9", {"a": "power", "v": 1}, None)]
+    assert seen == [("ou_9", "oc_9", "om_9", {"a": "power", "v": 1}, None, None, None)]
 
 
 def test_temperature_select_reports_through_action_option():
     client, seen = _action_client()
     client._on_card_action(_card_action(option="26"))
-    assert seen == [("ou_9", "oc_9", "om_9", None, "26")]
+    assert seen == [("ou_9", "oc_9", "om_9", None, "26", None, None)]
+
+
+def test_a_form_submit_carries_form_value_and_the_element_name():
+    # 设计 18.3：表单提交的字段在 action.form_value 里，键是元素 name。
+    client, seen = _action_client()
+    client._on_card_action(_card_action(value={"a": "preset_save"},
+                                        form_value={"name": "夏天", "temp": "26"},
+                                        name="submit"))
+    assert seen == [("ou_9", "oc_9", "om_9", {"a": "preset_save"}, None,
+                     {"name": "夏天", "temp": "26"}, "submit")]
 
 
 def test_unnested_card_payload_still_works():
@@ -117,7 +128,7 @@ def test_unnested_card_payload_still_works():
         action=types.SimpleNamespace(value={"a": "temp", "v": 20}, option=None),
         context=types.SimpleNamespace(open_chat_id="oc_9", open_message_id="om_9"),
     ))
-    assert seen == [("ou_9", "oc_9", "om_9", {"a": "temp", "v": 20}, None)]
+    assert seen == [("ou_9", "oc_9", "om_9", {"a": "temp", "v": 20}, None, None, None)]
 
 
 def test_fully_flat_card_payload_is_read_too():
@@ -127,7 +138,7 @@ def test_fully_flat_card_payload_is_read_too():
     client._on_card_action(types.SimpleNamespace(
         open_id="ou_9", open_chat_id="oc_9", open_message_id="om_9",
         value={"a": "power", "v": 0}, option=None))
-    assert seen == [("ou_9", "oc_9", "om_9", {"a": "power", "v": 0}, None)]
+    assert seen == [("ou_9", "oc_9", "om_9", {"a": "power", "v": 0}, None, None, None)]
 
 
 def test_a_dict_payload_is_read_too():
@@ -138,7 +149,7 @@ def test_a_dict_payload_is_read_too():
         "action": {"value": {"a": "mode", "v": 1}, "option": None},
         "context": {"open_chat_id": "oc_9", "open_message_id": "om_9"},
     }})
-    assert seen == [("ou_9", "oc_9", "om_9", {"a": "mode", "v": 1}, None)]
+    assert seen == [("ou_9", "oc_9", "om_9", {"a": "mode", "v": 1}, None, None, None)]
 
 
 def test_an_unreadable_click_dumps_its_raw_payload(caplog):
@@ -148,10 +159,10 @@ def test_an_unreadable_click_dumps_its_raw_payload(caplog):
         client._on_card_action(types.SimpleNamespace(event=None, note="mystery"))
     assert "card action payload matched no known shape" in caplog.text
     assert "mystery" in caplog.text
-    assert seen == [("", "", "", None, None)]
+    assert seen == [("", "", "", None, None, None, None)]
 
 
 def test_a_broken_click_payload_never_kills_the_socket():
     client, seen = _action_client()
     assert client._on_card_action(types.SimpleNamespace(event=None)) is not None
-    assert seen == [("", "", "", None, None)]
+    assert seen == [("", "", "", None, None, None, None)]

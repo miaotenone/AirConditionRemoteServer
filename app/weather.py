@@ -10,6 +10,7 @@ decision is unit tested from a fixed payload.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Optional
 
@@ -104,3 +105,55 @@ def parse_open_meteo(payload: dict) -> Optional[WeatherNow]:
         delta = int(round(float(hourly[2]) - float(hourly[0])))
 
     return WeatherNow(outdoor_c=outdoor, humidity=humidity, next2h_delta_c=delta)
+
+
+#: IP geolocation + forecast, both HTTPS. Kept behind functions so the decision
+#: above stays testable from a fixed payload.
+GEO_URL = "https://ipapi.co/json/"
+FORECAST_URL = (
+    "https://api.open-meteo.com/v1/forecast"
+    "?latitude={lat}&longitude={lon}"
+    "&current=temperature_2m,relative_humidity_2m"
+    "&hourly=temperature_2m&forecast_days=1&timezone=auto"
+)
+
+
+def _get_json(url: str, timeout: float) -> dict:
+    """One tiny JSON GET. Raises on any failure -- the caller decides."""
+    import urllib.request
+
+    with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310
+        return json.loads(response.read().decode("utf-8"))
+
+
+def geolocate(*, timeout: float = 6.0) -> Optional[tuple[float, float]]:
+    """Where we are, by public IP. ``None`` when the lookup fails."""
+    try:
+        payload = _get_json(GEO_URL, timeout)
+        return float(payload["latitude"]), float(payload["longitude"])
+    except Exception:  # noqa: BLE001 - a failed lookup is not fatal
+        return None
+
+
+def fetch_current(lat: float, lon: float, *, timeout: float = 8.0
+                  ) -> Optional[WeatherNow]:
+    """Outdoor conditions plus the two-hour trend, from Open-Meteo."""
+    try:
+        payload = _get_json(FORECAST_URL.format(lat=lat, lon=lon), timeout)
+    except Exception:  # noqa: BLE001
+        return None
+    return parse_open_meteo(payload)
+
+
+def fetch_now(*, lat: str = "", lon: str = "", timeout: float = 8.0
+              ) -> Optional[WeatherNow]:
+    """Locate (unless configured) and fetch, in one call the service can use."""
+    if lat and lon:
+        try:
+            return fetch_current(float(lat), float(lon), timeout=timeout)
+        except ValueError:
+            return None
+    located = geolocate(timeout=timeout)
+    if located is None:
+        return None
+    return fetch_current(*located, timeout=timeout)

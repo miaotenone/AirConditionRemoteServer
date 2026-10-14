@@ -44,8 +44,11 @@ from lark_oapi.event.callback.model.p2_card_action_trigger import (
 
 log = logging.getLogger(__name__)
 
-#: (open_id, chat_id, message_id, action.value, action.option) -> None
-ActionHandler = Callable[[str, str, str, Any, Any], None]
+#: (open_id, chat_id, message_id, action.value, action.option,
+#:  action.form_value, action.name) -> None. The last two were added for the
+#: v1.2 form cards (design 18.3): a `form_submit` button reports its fields in
+#: `form_value`, and `name` says which element was touched.
+ActionHandler = Callable[[str, str, str, Any, Any, Any, Any], None]
 #: (open_id, chat_id, message_id, text) -> None
 TextHandler = Callable[[str, str, str, str], None]
 
@@ -139,6 +142,30 @@ class FeishuClient:
             return False
         return True
 
+    def send_text(self, chat_id: str, text: str) -> bool:
+        """Post a new plain-text message -- for anything with no message to reply to.
+
+        A scheduled preset and the daily weather push fire with nobody's
+        message in hand, so they need a fresh top-level message (design §9.3).
+        """
+        request = (
+            CreateMessageRequest.builder()
+            .receive_id_type("chat_id")
+            .request_body(
+                CreateMessageRequestBody.builder()
+                .receive_id(chat_id)
+                .msg_type("text")
+                .content(_dump_text(text))
+                .build()
+            )
+            .build()
+        )
+        response = self._api.im.v1.message.create(request)
+        if not response.success():
+            log.error("send_text failed: code=%s msg=%s", response.code, response.msg)
+            return False
+        return True
+
     # ------------------------------------------------- long connection (inbound)
 
     def start(self) -> None:
@@ -180,13 +207,20 @@ class FeishuClient:
                                ("open_message_id",), ("message_id",)) or ""
             raw_value = _pick(roots, ("action", "value"), ("value",))
             raw_option = _pick(roots, ("action", "option"), ("option",))
-            log.info("card action from %s: value=%r option=%r", operator, raw_value, raw_option)
+            # A `form_submit` button reports its fields here, keyed by the
+            # element `name` (design 18.3).
+            raw_form = _pick(roots, ("action", "form_value"), ("form_value",))
+            card_name = _pick(roots, ("action", "name"), ("name",))
+            log.info("card action from %s: value=%r option=%r form=%r name=%r",
+                     operator, raw_value, raw_option, raw_form, card_name)
             if not operator and not chat_id and not message_id \
-                    and raw_value is None and raw_option is None:
+                    and raw_value is None and raw_option is None \
+                    and raw_form is None:
                 log.warning("card action payload matched no known shape: %s",
                             _payload(data))
             if self.on_action:
-                self.on_action(operator, chat_id, message_id, raw_value, raw_option)
+                self.on_action(operator, chat_id, message_id, raw_value,
+                               raw_option, raw_form, card_name)
         except Exception:  # noqa: BLE001 - never let a handler kill the socket
             log.exception("card action handler failed")
         # An empty response simply acknowledges the click well inside the 3 s
