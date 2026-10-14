@@ -13,7 +13,7 @@ Verified against lark-oapi 1.7.2:
   fields are ``data.event.operator.open_id``, ``data.event.action.value``,
   ``data.event.action.option``, and ``data.event.context.open_chat_id`` /
   ``data.event.context.open_message_id``. Reading the top level instead
-  yields a silent all-``None`` click.
+  yields an all-empty no-op that looks like a dead button (on device, 2026-10-14).
 
 The callback must be answered inside ~3 s (spec 5.5), so the handler only
 normalises the click, hands it to the service, and returns immediately. The card
@@ -151,19 +151,25 @@ class FeishuClient:
     def _on_card_action(self, data) -> None:
         """Answer a card click fast; the service does the real work."""
         try:
-            # The SDK nests the payload under `event`; keep a fallback to the
-            # flatter shape so an older SDK build degrades to "works" rather
-            # than to a silent all-None click.
-            event = _get(data, "event", None)
-            source = data if event is None else event
-            operator = _get(_get(source, "operator", None), "open_id", "")
-            context = _get(source, "context", None)
-            chat_id = _get(context, "open_chat_id", "")
-            message_id = _get(context, "open_message_id", "")
-            action = _get(source, "action", None)
-            raw_value = _get(action, "value", None)
-            raw_option = _get(action, "option", None)
+            # lark-oapi nests the click under `event`; older builds hand it over
+            # flat, and one real payload matched neither -- reading a single
+            # shape turned a tap into an all-empty no-op that the service then
+            # dropped as a non-owner event. Try every known shape, and say so
+            # loudly when none of them fits.
+            roots = [root for root in (_get(data, "event", None), data)
+                     if root is not None]
+            operator = _pick(roots, ("operator", "open_id"), ("open_id",)) or ""
+            chat_id = _pick(roots, ("context", "open_chat_id"),
+                            ("open_chat_id",), ("chat_id",)) or ""
+            message_id = _pick(roots, ("context", "open_message_id"),
+                               ("open_message_id",), ("message_id",)) or ""
+            raw_value = _pick(roots, ("action", "value"), ("value",))
+            raw_option = _pick(roots, ("action", "option"), ("option",))
             log.info("card action from %s: value=%r option=%r", operator, raw_value, raw_option)
+            if not operator and not chat_id and not message_id \
+                    and raw_value is None and raw_option is None:
+                log.warning("card action payload matched no known shape: %s",
+                            _payload(data))
             if self.on_action:
                 self.on_action(operator, chat_id, message_id, raw_value, raw_option)
         except Exception:  # noqa: BLE001 - never let a handler kill the socket
@@ -207,7 +213,44 @@ def _dump_text(text: str) -> str:
 
 
 def _get(obj: Any, name: str, default: Any = None) -> Any:
-    return getattr(obj, name, default) if obj is not None else default
+    # SDK models *and* raw dicts both turn up -- one build handed a callback
+    # over as a plain dict, where getattr() can only ever return the default.
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(name, default)
+    return getattr(obj, name, default)
+
+
+def _pick(roots: list, *paths: tuple) -> Any:
+    """First non-empty value found by walking each dotted path through `roots`.
+
+    `roots` is ordered by preference (the nested payload first, the top level
+    second), so the documented shape keeps winning when both are present.
+    """
+    for path in paths:
+        for root in roots:
+            cur = root
+            for part in path:
+                cur = _get(cur, part, None)
+                if cur is None:
+                    break
+            if cur not in (None, ""):
+                return cur
+    return None
+
+
+def _payload(data: Any) -> str:
+    """Dump a payload we could not read; writing the dump must never raise."""
+    marshal = getattr(getattr(lark, "JSON", None), "marshal", None)
+    if marshal is not None:
+        try:
+            text = str(marshal(data))
+        except Exception:  # noqa: BLE001 - diagnostics stay best-effort
+            text = ""
+        if text and text != "None":
+            return text
+    return repr(data)
 
 
 def _extract_text(content: Any) -> str:

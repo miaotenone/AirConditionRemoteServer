@@ -120,6 +120,37 @@ def test_unnested_card_payload_still_works():
     assert seen == [("ou_9", "oc_9", "om_9", {"a": "temp", "v": 20}, None)]
 
 
+def test_fully_flat_card_payload_is_read_too():
+    # 2026-10-14 上机：真实点击事件既没有 `event`，也没有 operator/action 包装，
+    # 只有裸字段 —— 少了这条路径，按钮点了就像没点，而且日志里看不出原因。
+    client, seen = _action_client()
+    client._on_card_action(types.SimpleNamespace(
+        open_id="ou_9", open_chat_id="oc_9", open_message_id="om_9",
+        value={"a": "power", "v": 0}, option=None))
+    assert seen == [("ou_9", "oc_9", "om_9", {"a": "power", "v": 0}, None)]
+
+
+def test_a_dict_payload_is_read_too():
+    # SDK 把回调当纯字典交出来时 getattr 只能拿到默认值 —— 字典也得认。
+    client, seen = _action_client()
+    client._on_card_action({"event": {
+        "operator": {"open_id": "ou_9"},
+        "action": {"value": {"a": "mode", "v": 1}, "option": None},
+        "context": {"open_chat_id": "oc_9", "open_message_id": "om_9"},
+    }})
+    assert seen == [("ou_9", "oc_9", "om_9", {"a": "mode", "v": 1}, None)]
+
+
+def test_an_unreadable_click_dumps_its_raw_payload(caplog):
+    # 上次事故就是「全空」却什么线索都没留；解不出来必须把原始报文写进日志。
+    client, seen = _action_client()
+    with caplog.at_level("WARNING", logger="app.feishu_client"):
+        client._on_card_action(types.SimpleNamespace(event=None, note="mystery"))
+    assert "card action payload matched no known shape" in caplog.text
+    assert "mystery" in caplog.text
+    assert seen == [("", "", "", None, None)]
+
+
 def test_a_broken_click_payload_never_kills_the_socket():
     client, seen = _action_client()
     assert client._on_card_action(types.SimpleNamespace(event=None)) is not None
