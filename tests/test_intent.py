@@ -274,3 +274,52 @@ def test_a_polite_command_is_still_a_command():
     assert parse("帮我开一下好吗").actions == (("power", 1),)
     assert parse("开机了吗").kind == "query"
     assert parse("关机了吗").kind == "query"
+
+
+# ---------------------------------------------------------- new v1.2 categories
+# 设计 §9.4：历史 / 夜间 / 天气 / 预设这四类**只认整句精确匹配**。
+# 「夜间状态」里含「状态」，所以它们必须排在 query 前面；但一句只是提到它们
+# 的话，仍然按 unclear 处理，绝不动空调。
+
+
+def test_history_windows_are_recognised():
+    for word, window in (("当前", "current"), ("今夜", "tonight"), ("一天", "day"),
+                         ("一周", "week"), ("全部", "all")):
+        intent = parse(word)
+        assert (intent.kind, intent.hint) == ("history", window), word
+
+
+def test_night_switch_and_status():
+    assert (parse("开夜间").kind, parse("开夜间").hint) == ("night", "on")
+    assert (parse("关夜间").kind, parse("关夜间").hint) == ("night", "off")
+    assert (parse("夜间状态").kind, parse("夜间状态").hint) == ("night", "status")
+
+
+def test_night_status_is_not_swallowed_by_the_query_branch():
+    # 「夜间状态」里有个「状态」，但它问的是夜间，不是空调当前状态。
+    assert parse("夜间状态").kind == "night"
+
+
+def test_weather_words_are_recognised():
+    for word in ("天气", "今天天气", "建议"):
+        assert parse(word).kind == "weather", word
+
+
+def test_the_preset_entry_word_opens_the_card():
+    assert (parse("预设").kind, parse("预设").hint) == ("preset", "open")
+    assert parse("设置预设").hint == "open"
+
+
+def test_a_preset_is_applied_only_with_a_verb_prefix():
+    assert (parse("用夏天").kind, parse("用夏天").hint) == ("preset", "apply:夏天")
+    assert parse("套用睡觉").hint == "apply:睡觉"
+
+
+def test_a_bare_preset_name_is_never_an_action():
+    # 纯名字（「夏天」）不认 —— 预知名字就执行太容易误触发。
+    assert parse("夏天").kind == "unclear"
+
+
+def test_the_new_categories_never_move_the_ac():
+    for word in ("当前", "今夜", "开夜间", "天气", "预设", "用夏天"):
+        assert parse(word).actions == (), word

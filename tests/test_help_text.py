@@ -33,6 +33,17 @@ EXAMPLES = [
     ("状态", "query", ()),
     ("现在多少度", "query", ()),
     ("太热了", "suggest", ()),
+    ("当前", "history", ()),
+    ("今夜", "history", ()),
+    ("一天", "history", ()),
+    ("一周", "history", ()),
+    ("全部", "history", ()),
+    ("开夜间", "night", ()),
+    ("关夜间", "night", ()),
+    ("夜间状态", "night", ()),
+    ("天气", "weather", ()),
+    ("预设", "preset", ()),
+    ("用夏天", "preset", ()),
 ]
 
 
@@ -48,7 +59,8 @@ def test_the_help_prints_every_example():
 
 
 def test_the_help_covers_every_group_the_grammar_has():
-    for label in ("开关", "模式", "温度", "风速", "查询"):
+    for label in ("开关", "模式", "温度", "风速", "查询",
+                  "历史", "夜间", "天气", "预设"):
         assert label in HELP_TEXT, label
 
 

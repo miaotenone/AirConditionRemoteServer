@@ -29,7 +29,10 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Callable, Literal
 
-Kind = Literal["actions", "query", "help", "unclear", "suggest"]
+from .preset import NAME_MAX
+
+Kind = Literal["actions", "query", "help", "unclear", "suggest",
+               "history", "night", "weather", "preset"]
 
 #: Canonical order of the actions in an Intent (design 4.3).
 FIELD_ORDER = ("power", "mode", "temp", "fan")
@@ -77,6 +80,18 @@ _QUERY_WORDS = ("状态", "多少度", "几度", "开着吗", "开着没", "怎�
 #: stays a command. Only the perfective endings are state questions.
 _QUERY_SUFFIXES = ("了吗", "了呢", "了没")
 _HELP_WORDS = ("帮助", "怎么用", "能做什么", "指令", "help")
+
+#: --- v1.2 categories (design 9.4) -----------------------------------------
+#: These are matched against the WHOLE normalised sentence, so a sentence that
+#: merely mentions them stays `unclear`. They are checked before the query
+#: branch because "夜间状态" contains "状态".
+_HISTORY_WORDS = {"当前": "current", "今夜": "tonight", "一天": "day",
+                  "一周": "week", "全部": "all"}
+_NIGHT_WORDS = {"开夜间": "on", "关夜间": "off", "夜间状态": "status"}
+_WEATHER_WORDS = ("天气", "今天天气", "建议")
+_PRESET_OPEN_WORDS = ("预设", "设置预设")
+#: Applying a preset by text needs a verb: a bare name must never move the AC.
+_PRESET_APPLY_PREFIXES = ("套用", "用")
 
 #: Feeling words. They carry no action (design D12) -- only a direction for the
 #: reply, because "太热了" is equally satisfied by -1, -3 or switching to cool.
@@ -437,6 +452,28 @@ def _adjective(text: str) -> str | None:
     return None
 
 
+def _exact_intent(clean: str) -> Intent | None:
+    """The v1.2 categories, matching the whole sentence only (design 9.4).
+
+    Kept separate from the value grammar because these do not act on the AC at
+    all -- they ask for a card, a history window, the night switch or a preset.
+    """
+    if clean in _HISTORY_WORDS:
+        return Intent(kind="history", hint=_HISTORY_WORDS[clean])
+    if clean in _NIGHT_WORDS:
+        return Intent(kind="night", hint=_NIGHT_WORDS[clean])
+    if clean in _WEATHER_WORDS:
+        return Intent(kind="weather")
+    if clean in _PRESET_OPEN_WORDS:
+        return Intent(kind="preset", hint="open")
+    for prefix in _PRESET_APPLY_PREFIXES:
+        if clean.startswith(prefix):
+            name = clean[len(prefix):]
+            if 0 < len(name) <= NAME_MAX:
+                return Intent(kind="preset", hint=f"apply:{name}")
+    return None
+
+
 def parse(text: str) -> Intent:
     """Turn one message into what it asks for (design 4.2/4.3).
 
@@ -447,6 +484,10 @@ def parse(text: str) -> Intent:
     Total: whatever the user typed, this returns an Intent rather than raising.
     """
     clean, negated = _strip_negations(normalize(text))
+
+    exact = _exact_intent(clean)
+    if exact is not None:
+        return exact
 
     if any(word in clean for word in _QUERY_WORDS) or clean.endswith(_QUERY_SUFFIXES):
         return Intent(kind="query")
