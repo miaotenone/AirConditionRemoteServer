@@ -115,7 +115,10 @@ python -m app.main
 - 完整词表、分派顺序、回执格式见 [`docs/interface-spec.md`](docs/interface-spec.md) §5.6；
   设计与取舍（含 18 条决策、7 条已知限制）见
   [`docs/superpowers/specs/2026-10-13-feishu-text-control-design.md`](docs/superpowers/specs/2026-10-13-feishu-text-control-design.md)。
-- 不想要这个功能：`TEXT_CONTROL_ENABLED=false`，回到「只有 `/ac` 有反应」。
+- **召唤卡片**：发 `设置卡片`（可带句号）→ 一张**新卡**发到消息流最新位置，旧卡被撤回
+  （撤不回则旧卡变成一行「遥控器已更新，最新一张在下面 👇」）。旧召唤词 `/ac`、`/start`、
+  `ac`、`空调` 已退场 —— 现在回「没听懂这句。…」，并照旧补一张卡。
+- 不想要这个功能：`TEXT_CONTROL_ENABLED=false`，回到「只有 `设置卡片` 有反应」。
 
 ## MQTT 契约速览
 

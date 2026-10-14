@@ -20,7 +20,7 @@ import time
 from datetime import datetime
 
 from .actions import normalize_action
-from .cards import build_card
+from .cards import build_card, build_moved_notice_card
 from .config import Settings
 from .feishu_client import FeishuClient
 from .intent import parse
@@ -40,8 +40,23 @@ from .store import CardStore
 
 log = logging.getLogger(__name__)
 
-#: Text that asks the bot to (re)send the remote-control card.
-CARD_COMMANDS = ("/ac", "/start", "ac", "空调")
+#: The summon word: posts a fresh card at the bottom of the chat and retires
+#: the old one (design D22). The former words (`/ac`, `/start`, `ac`, `空调`)
+#: now fall through to the parser as `unclear` like any other unknown sentence.
+CARD_COMMANDS = ("设置卡片",)
+
+#: Trailing sentence punctuation users add without thinking ("设置卡片。").
+_TRAILING_PUNCTUATION = "。！？!?."
+
+
+def _is_card_command(text: str) -> bool:
+    """True when `text` is the summon word, tolerating stray punctuation.
+
+    Comparison only: the original `text` is still what gets handed to
+    `parse()`, so this never changes how any other sentence is read.
+    """
+    key = text.strip().rstrip(_TRAILING_PUNCTUATION).strip()
+    return key.lower() in CARD_COMMANDS
 
 
 class Service:
@@ -141,8 +156,10 @@ class Service:
             log.info("ignoring redelivered message %s", message_id)
             return
 
-        if text.lower() in CARD_COMMANDS:
-            self._send_or_refresh_card(chat_id)     # "/ac" literally means "the card"
+        if _is_card_command(text):
+            # Summon: a new card at the newest position, no text receipt --
+            # the card showing up where the message landed is the feedback.
+            self._summon_card(chat_id)
             return
 
         intent = parse(text)
@@ -172,8 +189,8 @@ class Service:
 
     def _plain_text_fallback(self, chat_id: str, text: str) -> None:
         """The pre-text-control behaviour, kept for `TEXT_CONTROL_ENABLED=false`."""
-        if text.lower() in CARD_COMMANDS:
-            self._send_or_refresh_card(chat_id)
+        if _is_card_command(text):
+            self._summon_card(chat_id)
         else:
             log.info("ignoring message %r; send one of %s for the card", text, CARD_COMMANDS)
 
@@ -186,6 +203,37 @@ class Service:
         if self.store.get_message_id(self.settings.owner_open_id):
             return
         self._send_or_refresh_card(chat_id)
+
+    def _summon_card(self, chat_id: str) -> None:
+        """Summon the card to the newest position in the chat (design D22).
+
+        Send first, switch the pointer, then retire the old card -- in that
+        order, so a failed send never costs us the card we already had. If the
+        recall fails (Feishu only allows ~24 h), the old card is downgraded to
+        a one-line notice; if even that patch fails, give up with a warning --
+        the old card is still harmless, because clicking it re-points the store
+        at itself (`_on_card_action`). No text receipt either way.
+        """
+        owner = self.settings.owner_open_id
+        old = self.store.get_message_id(owner)
+        with self._lock:
+            card = self._card()
+            serialised = json.dumps(card, sort_keys=True)
+
+        message_id = self.feishu.send_card(chat_id, card)
+        if not message_id:
+            return                      # send failed: keep the old card as-is
+        self.store.set_message_id(owner, message_id)
+        with self._lock:
+            self._rendered = serialised
+        log.info("card summoned (message_id=%s, previous=%s)", message_id, old)
+
+        if not old or old == message_id:
+            return
+        if self.feishu.recall_card(old):
+            return
+        if not self.feishu.patch_card(old, build_moved_notice_card()):
+            log.warning("could not recall or downgrade the old card %s", old)
 
     def _on_card_action(self, open_id: str, chat_id: str, message_id: str,
                         value, option) -> None:
@@ -284,7 +332,7 @@ class Service:
             message_id = self.store.get_message_id(self.settings.owner_open_id)
 
         if not message_id:
-            return              # nothing posted yet; the next "/ac" will create it
+            return              # nothing posted yet; the next "设置卡片" creates it
         if self.feishu.patch_card(message_id, card):
             with self._lock:
                 self._rendered = serialised

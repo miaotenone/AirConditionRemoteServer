@@ -10,6 +10,10 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-13-feishu-text-control-design.md`（本计划实现它的 §1–§9）
 
+> **变更（2026-10-14，见 spec §10 D22）**：唯一召唤词已由 `/ac` 改为 **`设置卡片`**
+> （新发卡 → 换指针 → 撤回旧卡）。本计划里出现的 `/ac` 是当时的实现记录：旧词现在落入解析器
+> 判 `unclear`，回「没听懂这句。…」并照旧补卡。
+
 ## Global Constraints
 
 - Python 3.10+；**不得新增任何依赖**（不许改 `pyproject.toml` 的 `dependencies`）。

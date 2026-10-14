@@ -32,6 +32,7 @@ import lark_oapi as lark
 from lark_oapi.api.im.v1 import (
     CreateMessageRequest,
     CreateMessageRequestBody,
+    DeleteMessageRequest,
     PatchMessageRequest,
     PatchMessageRequestBody,
     ReplyMessageRequest,
@@ -97,6 +98,20 @@ class FeishuClient:
         response = self._api.im.v1.message.patch(request)
         if not response.success():
             log.error("patch_card failed: code=%s msg=%s", response.code, response.msg)
+            return False
+        return True
+
+    def recall_card(self, message_id: str) -> bool:
+        """Delete (recall) an old card message -- the summon path's cleanup.
+
+        Feishu only allows recalling a message for ~24 h after posting, so a
+        failure here is expected rather than fatal: the caller downgrades the
+        old card to a one-line notice instead (design D22).
+        """
+        request = DeleteMessageRequest.builder().message_id(message_id).build()
+        response = self._api.im.v1.message.delete(request)
+        if not response.success():
+            log.warning("recall_card failed: code=%s msg=%s", response.code, response.msg)
             return False
         return True
 
@@ -179,7 +194,7 @@ class FeishuClient:
         return P2CardActionTriggerResponse({})
 
     def _on_message(self, data) -> None:
-        """A plain text message is a command (or a "/ac" asking for the card)."""
+        """A plain text message is a command (or a "设置卡片" summoning the card)."""
         try:
             event = getattr(data, "event", None)
             message = _get(event, "message", None)

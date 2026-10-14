@@ -122,6 +122,29 @@ def _temperature_select(state: AcState, disabled: bool) -> dict:
     return select
 
 
+def build_moved_notice_card() -> dict:
+    """A one-line placeholder for an old card that could not be recalled.
+
+    Summoning a fresh card (design D22) tries to recall the previous one;
+    Feishu only allows that for ~24 h, so the old card is downgraded to this
+    notice instead -- pointing at the new card, which now sits below it in
+    the chat.
+    """
+    return {
+        "schema": "2.0",
+        "config": {"update_multi": True},
+        "header": {
+            "title": {"tag": "plain_text", "content": HEADER_TITLE},
+            "template": THEME_OFFLINE,
+        },
+        "body": {
+            "elements": [
+                {"tag": "markdown", "content": "遥控器已更新，最新一张在下面 👇"},
+            ]
+        },
+    }
+
+
 def build_card(state: AcState, presence: Presence, *,
                pending: bool = False, unconfirmed: bool = False, stale: bool = False,
                updated_at: str = "--:--:--") -> dict:

@@ -28,6 +28,13 @@ class FakeFeishu:
         self.patched.append(message_id)
         return True
 
+    def recall_card(self, message_id):
+        # 新增：召唤词撤回旧卡（设计 D22）。置 recall_succeeds=False 模拟撤回失败。
+        if getattr(self, "recalled", None) is None:
+            self.recalled = []
+        self.recalled.append(message_id)
+        return getattr(self, "recall_succeeds", True)
+
 
 def build_service(tmp_path, **overrides):
     values = {"feishu_app_id": "cli_test", "feishu_app_secret": "secret",
@@ -123,7 +130,7 @@ def test_a_query_gets_a_receipt_without_moving_anything(tmp_path):
 
 def test_card_commands_still_post_the_card_without_a_receipt(tmp_path):
     service = build_service(tmp_path)
-    service._on_text_message("ou_test", "oc_1", "om_1", "/ac")
+    service._on_text_message("ou_test", "oc_1", "om_1", "设置卡片")
     assert service.feishu.sent == ["oc_1"]
     assert service.feishu.replies == []
     assert service._actions.empty()
@@ -148,3 +155,66 @@ def test_relative_steps_are_reported_once_each(tmp_path):
         "✅ 已关机 · 制冷 · 20℃ · 自动风（当前关机，开机后生效）",
         "✅ 已关机 · 制冷 · 18℃ · 自动风（当前关机，开机后生效）",
     ]
+
+
+def test_summon_replaces_the_old_card_with_a_new_one_and_stays_silent(tmp_path):
+    # 设计 D22：召唤 = 新发卡 → 换指针 → 撤回旧卡；全程无文字回执
+    service = build_service(tmp_path)
+    service.store.set_message_id("ou_test", "om_old")
+    service._on_text_message("ou_test", "oc_1", "om_1", "设置卡片")
+    assert service.feishu.sent == ["oc_1"]              # 新卡发出去了
+    assert service.store.get_message_id("ou_test") == "om_card"   # 指针切到新卡
+    assert service.feishu.recalled == ["om_old"]        # 旧卡被撤回
+    assert service.feishu.replies == []
+    assert service._actions.empty()
+
+
+def test_a_failed_recall_degrades_the_old_card_to_a_notice(tmp_path):
+    # 撤回失败（飞书 24h 时限）→ 旧卡 patch 成一行提示卡；指针仍是新卡
+    service = build_service(tmp_path)
+    service.store.set_message_id("ou_test", "om_old")
+    service.feishu.recall_succeeds = False
+    patched_cards = []
+    real_patch_card = service.feishu.patch_card
+
+    def spy(message_id, card):
+        patched_cards.append((message_id, card))
+        return real_patch_card(message_id, card)
+
+    service.feishu.patch_card = spy
+    service._on_text_message("ou_test", "oc_1", "om_1", "设置卡片")
+    assert service.store.get_message_id("ou_test") == "om_card"
+    assert service.feishu.recalled == ["om_old"]
+    assert [message_id for message_id, _ in patched_cards] == ["om_old"]
+    assert "遥控器已更新" in patched_cards[0][1]["body"]["elements"][0]["content"]
+    assert service.feishu.replies == []
+
+
+def test_summon_without_an_old_card_posts_exactly_one_card(tmp_path):
+    service = build_service(tmp_path)
+    service._on_text_message("ou_test", "oc_1", "om_1", "设置卡片")
+    assert service.feishu.sent == ["oc_1"]
+    assert service.store.get_message_id("ou_test") == "om_card"
+    assert getattr(service.feishu, "recalled", []) == []   # 没有撤回调用
+    assert service.feishu.replies == []
+
+
+def test_the_retired_card_words_now_fall_back_to_unclear(tmp_path):
+    # 旧召唤词（/ac、空调）退场：回「没听懂这句。…」，无卡时照旧补一张（设计 §8 #8）
+    service = build_service(tmp_path)
+    service._on_text_message("ou_test", "oc_1", "om_1", "/ac")
+    service._on_text_message("ou_test", "oc_1", "om_2", "空调")
+    assert len(service.feishu.replies) == 2
+    assert all("没听懂这句。试试：" in text for _, text in service.feishu.replies)
+    assert service.feishu.sent == ["oc_1"]   # 只在无卡时补；之后不新发
+    assert service._actions.empty()
+
+
+def test_a_trailing_period_still_summons(tmp_path):
+    service = build_service(tmp_path)
+    service.store.set_message_id("ou_test", "om_old")
+    service._on_text_message("ou_test", "oc_1", "om_1", "设置卡片。")
+    assert service.feishu.sent == ["oc_1"]
+    assert service.store.get_message_id("ou_test") == "om_card"
+    assert service.feishu.recalled == ["om_old"]
+    assert service.feishu.replies == []
