@@ -5,9 +5,17 @@ get subtly wrong, so it is asserted structurally here rather than by eyeballing
 JSON. No Feishu, no MQTT.
 """
 
+import datetime as dt
 import json
 
-from app.cards import build_card
+from app.cards import (
+    build_card,
+    build_history_card,
+    build_preset_card,
+    build_preset_form,
+    build_settings_card,
+    build_weather_card,
+)
 from app.state import AC_FAN, AC_MODE, TEMP_MAX, TEMP_MIN, AcState, Presence
 
 # -------------------------------------------------------------- test helpers
@@ -18,6 +26,8 @@ def _walk(elements):
         yield element
         for column in element.get("columns") or []:
             yield from _walk(column.get("elements") or [])
+        if element.get("tag") == "form":
+            yield from _walk(element.get("elements") or [])
 
 
 def elements(card):
@@ -208,3 +218,100 @@ def test_every_callback_value_is_a_supported_action():
 
     for button in buttons(build_card(AcState(), Presence(online=True))):
         assert callback_value(button)["a"] in ALLOWED_ACTIONS
+
+
+# --------------------------------------------------------- preset / settings
+# 设计 §9.2 / 18.1：预设、设置、天气各占一张卡；所有交互都带 {a, v}，表单
+# 提交走 action.form_value（键 = 元素 name）。
+
+
+def test_the_preset_card_lists_every_preset_with_apply_edit_delete():
+    from app.preset import Preset
+
+    presets = [Preset(id=1, name="夏天", temp=26), Preset(id=2, name="冬天", mode=4)]
+    card = build_preset_card(presets)
+    assert button_values(card, "preset_apply") == {1, 2}
+    assert button_values(card, "preset_edit") == {1, 2}
+    assert button_values(card, "preset_delete") == {1, 2}
+    assert buttons(card, "preset_new")
+
+
+def test_the_delete_button_asks_for_confirmation():
+    from app.preset import Preset
+
+    (delete,) = buttons(build_preset_card([Preset(id=1, name="夏天")]), "preset_delete")
+    assert delete.get("confirm"), "删除预设必须二次确认"
+
+
+def test_the_preset_card_renders_empty():
+    assert "还没有" in markdown(build_preset_card([]))
+
+
+def test_the_preset_form_is_a_root_level_form():
+    from app.preset import Preset
+
+    card = build_preset_form(Preset(id=1, name="夏天", temp=26))
+    (form,) = [e for e in card["body"]["elements"] if e.get("tag") == "form"]
+    names = {e.get("name") for e in form["elements"]}
+    assert {"name", "power", "mode", "fan", "temp", "at"} <= names
+
+
+def test_the_preset_form_submits_as_a_form_submit_button():
+    (submit,) = buttons(build_preset_form(), "preset_save")
+    assert submit["action_type"] == "form_submit"
+
+
+def test_the_preset_form_prefills_an_existing_preset():
+    from app.preset import Preset
+
+    values = {e["name"]: e.get("default_value")
+              for e in elements(build_preset_form(Preset(id=1, name="夏天", temp=26)))
+              if e.get("tag") == "input"}
+    assert values["name"] == "夏天"
+
+
+def test_the_settings_card_collects_push_time_and_the_night_window():
+    card = build_settings_card({"push_time": "17:00", "night_target": "26"},
+                               night_enabled=True)
+    names = {e.get("name") for e in elements(card) if e.get("tag") == "form"}
+    # the form is itself an element with a name
+    assert "settings_form" in names
+    inner = {e.get("name") for e in elements(card)}
+    assert {"push_time", "night_start", "night_end", "night_target"} <= inner
+    assert buttons(card, "settings_save")
+    assert buttons(card, "night_toggle")
+
+
+def test_the_settings_night_toggle_reflects_the_current_state():
+    on = callback_value(buttons(build_settings_card({}, night_enabled=True), "night_toggle")[0])
+    off = callback_value(buttons(build_settings_card({}, night_enabled=False), "night_toggle")[0])
+    assert on["v"] != off["v"]
+
+
+def test_the_weather_card_carries_the_recommendation_and_two_buttons():
+    from app.weather import WeatherNow, recommend
+
+    card = build_weather_card(WeatherNow(outdoor_c=36, humidity=50), recommend(36))
+    assert "制冷 26℃" in markdown(card)
+    assert buttons(card, "weather_exec") and buttons(card, "weather_ignore")
+
+
+def test_the_history_card_renders_a_summary():
+    from app.env import EnvSample, aggregate
+
+    summary = aggregate([EnvSample(1.0, 26, 50)],
+                        now=dt.datetime(2026, 10, 15, 12, 0), window="current")
+    assert "26℃" in markdown(build_history_card(summary))
+
+
+def test_the_new_cards_are_all_json_serialisable():
+    from app.env import Summary
+    from app.preset import Preset
+    from app.weather import WeatherNow, recommend
+
+    for card in (build_preset_card([Preset(id=1, name="夏天")]),
+                 build_preset_form(),
+                 build_settings_card({}, night_enabled=False),
+                 build_weather_card(WeatherNow(outdoor_c=30), recommend(30)),
+                 build_history_card(Summary(window="all"))):
+        json.dumps(card)

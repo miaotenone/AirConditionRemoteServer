@@ -26,9 +26,20 @@ passes the already-formatted ``updated_at`` clock string.
 
 from __future__ import annotations
 
+from typing import Mapping, Optional, Sequence
+
+from .env import Summary
+from .preset import Preset
 from .state import AC_FAN, AC_MODE, TEMP_MAX, TEMP_MIN, AcState, Presence
+from .weather import Recommendation, WeatherNow
 
 HEADER_TITLE = "❄️ 空调遥控器"
+
+#: Headers for the v1.2 cards (design §9.2).
+PRESET_TITLE = "🎛 预设"
+SETTINGS_TITLE = "⚙️ 设置"
+WEATHER_TITLE = "🌤 天气建议"
+HISTORY_TITLE = "📈 温度历史"
 
 #: Human labels, derived from the single source of truth for the values.
 _MODE_NAMES = {"auto": "自动", "cool": "制冷", "dry": "除湿", "fan": "送风", "heat": "制热"}
@@ -203,3 +214,199 @@ def build_card(state: AcState, presence: Presence, *,
             ]
         },
     }
+
+
+# ------------------------------------------------------- v1.2 cards (§9.2)
+# 每张卡各占一条消息，各自原地 patch（设计 18.1）。回调一律是 {a, v}；表单
+# 提交走 action.form_value，键就是下面每个元素的 name。
+
+
+def _confirm(title: str, text: str) -> dict:
+    return {
+        "title": {"tag": "plain_text", "content": title},
+        "text": {"tag": "plain_text", "content": text},
+    }
+
+
+def _submit_button(label: str, action: str) -> dict:
+    """A form's submit button: the click carries `action.form_value`."""
+    return {
+        "tag": "button",
+        "size": "medium",
+        "type": "primary",
+        "name": "submit",
+        "action_type": "form_submit",
+        "text": {"tag": "plain_text", "content": label},
+        "behaviors": [{"type": "callback", "value": {"a": action}}],
+    }
+
+
+def _options(pairs) -> list:
+    return [{"text": {"tag": "plain_text", "content": label}, "value": str(value)}
+            for label, value in pairs]
+
+
+def _select(name: str, placeholder: str, pairs, *, tag: str = "select_static") -> dict:
+    return {
+        "tag": tag,
+        "name": name,
+        "placeholder": {"tag": "plain_text", "content": placeholder},
+        "options": _options(pairs),
+    }
+
+
+def _time_picker(name: str, placeholder: str) -> dict:
+    return {
+        "tag": "picker_time",
+        "name": name,
+        "placeholder": {"tag": "plain_text", "content": placeholder},
+    }
+
+
+def _plain_input(name: str, placeholder: str, *, value: str = "") -> dict:
+    element = {
+        "tag": "input",
+        "name": name,
+        "label": {"tag": "plain_text", "content": placeholder},
+    }
+    if value:
+        element["default_value"] = value
+    return element
+
+
+def _form(name: str, children: list) -> dict:
+    """A card-root form container (2.0 requires it at the root)."""
+    return {"tag": "form", "name": name, "elements": children}
+
+
+_MODE_CHOICES = [(MODE_LABELS[value], value) for value in sorted(MODE_LABELS)]
+_FAN_CHOICES = [(FAN_LABELS[value], value) for value in sorted(FAN_LABELS)]
+_TEMP_CHOICES = [(f"{t}℃", t) for t in range(TEMP_MIN, TEMP_MAX + 1)]
+
+
+def _card_shell(title: str, template: str, elements: list) -> dict:
+    return {
+        "schema": "2.0",
+        "config": {"update_multi": True},
+        "header": {"title": {"tag": "plain_text", "content": title},
+                   "template": template},
+        "body": {"elements": elements},
+    }
+
+
+def build_preset_card(presets: Sequence[Preset], *, status: str = "") -> dict:
+    """The preset list: apply / edit / delete each, plus create."""
+    elements: list = []
+    if status:
+        elements.append({"tag": "markdown", "content": status})
+
+    if not presets:
+        elements.append({"tag": "markdown", "content": "还没有预设。点下面的「＋ 新建」创建。"})
+    else:
+        elements.append({"tag": "markdown", "content": "**点名字套用，右侧可改可删**"})
+        for preset in presets:
+            label = f"{preset.name}（{'开' if preset.power else '关'} · "
+            label += f"{MODE_LABELS.get(preset.mode, preset.mode)} · {preset.temp}℃"
+            label += f" · {FAN_LABELS.get(preset.fan, preset.fan)}风）"
+            elements.append(_row([
+                _button(label, "preset_apply", preset.id),
+                _button("改", "preset_edit", preset.id, size="small"),
+                _delete_button(preset),
+            ]))
+
+    elements.append(_row([_button("＋ 新建", "preset_new", 0, size="small")]))
+    return _card_shell(PRESET_TITLE, "blue", elements)
+
+
+def _delete_button(preset: Preset) -> dict:
+    button = _button("删", "preset_delete", preset.id, size="small")
+    button["confirm"] = _confirm("删除预设", f"确定删除「{preset.name}」？")
+    return button
+
+
+def build_preset_form(preset: Optional[Preset] = None, *, status: str = "") -> dict:
+    """The create/edit form. All four fields are present (design 5.1)."""
+    editing = preset is not None
+    current = preset or Preset(name="", power=1, mode=AC_MODE["cool"],
+                               temp=24, fan=AC_FAN["auto"])
+
+    children = [
+        _plain_input("name", "预设名字（如 夏天、睡觉）", value=current.name if editing else ""),
+        _select("power", "电源", [("开机", 1), ("关机", 0)]),
+        _select("mode", "模式", _MODE_CHOICES),
+        _select("fan", "风速", _FAN_CHOICES),
+        _select("temp", f"温度（当前 {current.temp}℃）", _TEMP_CHOICES),
+        _time_picker("at", "定时（可选，不填＝点一下立刻执行）"),
+        _submit_button("保存", "preset_save"),
+    ]
+    elements = []
+    if status:
+        elements.append({"tag": "markdown", "content": status})
+    elements.append(_form("preset_form", children))
+    return _card_shell(PRESET_TITLE, "blue", elements)
+
+
+def build_settings_card(settings: Mapping[str, str], *, night_enabled: bool,
+                        status: str = "") -> dict:
+    """Push time and the night window/target -- all editable here (design §7)."""
+    children = [
+        _time_picker("push_time", f"天气推送时间（当前 {settings.get('push_time', '17:00')}）"),
+        _time_picker("night_start", f"夜间开始（当前 {settings.get('night_start', '23:00')}）"),
+        _time_picker("night_end", f"夜间结束（当前 {settings.get('night_end', '07:00')}）"),
+        _select("night_target",
+                f"夜间目标温度（当前 {settings.get('night_target', '26')}℃）",
+                _TEMP_CHOICES),
+        _submit_button("保存设置", "settings_save"),
+    ]
+
+    elements = []
+    if status:
+        elements.append({"tag": "markdown", "content": status})
+    elements.append({
+        "tag": "markdown",
+        "content": f"**夜间模式**：{'已开' if night_enabled else '未开'}"
+                   "（开着的夜间才按上面的目标自动调节，风速只到低）",
+    })
+    elements.append(_row([
+        _button("关 夜间" if night_enabled else "开 夜间", "night_toggle",
+                0 if night_enabled else 1),
+    ]))
+    elements.append(_form("settings_form", children))
+    return _card_shell(SETTINGS_TITLE, "turquoise", elements)
+
+
+def build_weather_card(now: Optional[WeatherNow],
+                       recommendation: Optional[Recommendation],
+                       *, status: str = "") -> dict:
+    """The daily suggestion: outdoor reading + one-tap apply / ignore."""
+    elements = []
+    if status:
+        elements.append({"tag": "markdown", "content": status})
+
+    if now is None or recommendation is None:
+        elements.append({"tag": "markdown", "content": "🌤 天气没拿到，稍后再试。"})
+        return _card_shell(WEATHER_TITLE, "grey", elements)
+
+    lines = [f"**室外** {now.outdoor_c}℃"]
+    if now.humidity is not None:
+        lines.append(f"湿度 {now.humidity}%")
+    if now.next2h_delta_c:
+        lines.append(f"两小时内 {'↓' if now.next2h_delta_c < 0 else '↑'}"
+                     f"{abs(now.next2h_delta_c)}℃")
+    elements.append({"tag": "markdown", "content": " · ".join(lines)})
+    elements.append({"tag": "markdown", "content": f"**建议**：{recommendation.note}"})
+    elements.append(_row([
+        _button("立即执行", "weather_exec", 0),
+        _button("忽略", "weather_ignore", 0),
+    ]))
+    return _card_shell(WEATHER_TITLE, "orange", elements)
+
+
+def build_history_card(summary: Summary, *, target: Optional[int] = None,
+                       text: str = "") -> dict:
+    """A read-only view of one history window (the text reply, on a card)."""
+    from .replies import render_history  # local import: avoids an import cycle
+
+    content = text or render_history(summary, target=target)
+    return _card_shell(HISTORY_TITLE, "indigo",
+                       [{"tag": "markdown", "content": content}])
