@@ -52,6 +52,21 @@ class Settings(BaseSettings):
     text_control_enabled: bool = True
     db_path: str = "ac-bot.sqlite3"
 
+    # --- DHT11 feedback + night loop (design §7/§11) ---
+    #: How often the latest `ac/env` reading is appended to the history.
+    dht_record_s: int = 300
+    #: Default time the daily weather suggestion is pushed (editable on a card).
+    weather_default_push: str = "17:00"
+    #: Default night target and time window (both editable on a card).
+    night_default_target: int = 26
+    night_default_start: str = "23:00"
+    night_default_end: str = "07:00"
+    #: How often the service publishes `ac/hb`, the device's liveness proof.
+    hb_interval_s: int = 30
+    #: Optional lat/lon override; empty means "geolocate by IP".
+    weather_lat: str = ""
+    weather_lon: str = ""
+
     @property
     def cmd_topic(self) -> str:
         return f"{self.mqtt_prefix}/cmd"
@@ -63,3 +78,15 @@ class Settings(BaseSettings):
     @property
     def status_topic(self) -> str:
         return f"{self.mqtt_prefix}/status"
+
+    @property
+    def env_topic(self) -> str:
+        return f"{self.mqtt_prefix}/env"
+
+    @property
+    def hb_topic(self) -> str:
+        return f"{self.mqtt_prefix}/hb"
+
+    @property
+    def event_topic(self) -> str:
+        return f"{self.mqtt_prefix}/event"

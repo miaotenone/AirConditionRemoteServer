@@ -64,6 +64,30 @@ def test_topics_follow_a_custom_prefix():
     assert build(mqtt_prefix="ac2").cmd_topic == "ac2/cmd"
 
 
+def test_the_new_topics_are_derived_from_the_prefix():
+    # 设计 §9.1：设备上报环境、服务发心跳、设备上报事件。
+    settings = build()
+    assert settings.env_topic == "ac/env"
+    assert settings.hb_topic == "ac/hb"
+    assert settings.event_topic == "ac/event"
+
+
+def test_the_new_behaviour_defaults_match_the_design():
+    settings = build()
+    assert settings.dht_record_s == 300
+    assert settings.weather_default_push == "17:00"
+    assert settings.night_default_target == 26
+    assert settings.night_default_start == "23:00"
+    assert settings.night_default_end == "07:00"
+    assert settings.hb_interval_s == 30
+
+
+def test_weather_location_can_be_overridden():
+    settings = build(weather_lat="31.23", weather_lon="121.47")
+    assert (settings.weather_lat, settings.weather_lon) == ("31.23", "121.47")
+
+
+
 def test_secrets_are_not_leaked_by_repr():
     settings = build()
     assert "topsecret" not in repr(settings)
