@@ -13,12 +13,30 @@ from .cards import FAN_LABELS, MODE_LABELS
 from .intent import Intent
 from .state import TEMP_MAX, TEMP_MIN, AcState, Presence, apply_action, clamp_temp
 
-#: The one-line grammar reminder. Both replies below quote it, but with
-#: different intros -- saying "能听懂这些" to someone you just failed to
-#: understand reads as a rebuke (design 5.4).
+#: The one-line grammar reminder, used by the *failure* reply only. It is
+#: deliberately short: it appears after "没听懂这句", where length is the
+#: problem, not depth. The help reply below is a full cheat sheet instead
+#: (user feedback: "帮助给的内容太少了，不足以使用").
 _GRAMMAR_HINT = "开机 / 关掉 / 调到24度 / 制冷 / 风速最大 / 状态"
-HELP_TEXT = f"能听懂这些：{_GRAMMAR_HINT}"
 UNCLEAR_TEXT = f"没听懂这句。试试：{_GRAMMAR_HINT}"
+
+#: Someone typed "帮助", so they get the whole vocabulary, grouped the way the
+#: card and the bot menu group it. Every example here is pinned by
+#: ``tests/test_help_text.py`` against the parser -- an example the bot does not
+#: understand would walk the user straight into "没听懂". The two replies keep
+#: different intros on purpose: "能听懂这些" answers someone who asked, while
+#: "没听懂这句" would read as a rebuke to someone who just failed (design 5.4).
+HELP_TEXT = (
+    "能听懂这些（也可以直接点输入框上方的菜单）：\n"
+    "开关：开机 / 关机 / 关掉 / 帮我开一下\n"
+    "模式：自动 / 制冷 / 除湿 / 送风 / 制热\n"
+    f"温度：调到26度 / 26度 / 降2度 / 升2度（{TEMP_MIN}~{TEMP_MAX}℃）\n"
+    "风速：风速自动 / 风速低 / 风速中 / 风速最大\n"
+    "组合：制冷26度（一句话同时改模式和温度）\n"
+    "查询：状态 / 现在多少度\n"
+    "感觉：太热了 / 有点冷（只给建议，不动空调）\n"
+    "卡片：设置卡片（把遥控器卡片重新发到最下面）"
+)
 
 #: Human names for the fields a refusal can name.
 _FIELD_NAMES = {"power": "电源", "mode": "模式", "temp": "温度", "fan": "风速"}
