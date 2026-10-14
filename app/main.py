@@ -268,7 +268,10 @@ class Service:
         self._queue_actions(actions)
         chat_id = self._chat_id()
         if chat_id:
-            self.feishu.send_text(chat_id, "🔌 设备失联已自动关机，重新连上后已恢复原先的空调状态")
+            # Called from the MQTT thread, so the Feishu round trip is handed
+            # off rather than blocking the client loop.
+            self._run_async(self.feishu.send_text, chat_id,
+                            "🔌 设备失联已自动关机，重新连上后已恢复原先的空调状态")
         return True
 
     # ----------------------------------------------------------- Feishu inbound
@@ -372,7 +375,22 @@ class Service:
             self._show_settings_card(self._chat_id())
         return text
 
+    def _run_async(self, fn, *args) -> None:
+        """Hand slow work off the Feishu callback thread.
+
+        The SDK calls the handlers on its own receive thread and expects them
+        back promptly; a 10 s HTTPS round trip in there would stall every other
+        message and button press (design 5.5). Overridden in tests so the
+        dispatch stays deterministic.
+        """
+        threading.Thread(target=fn, args=args, name="ac-async", daemon=True).start()
+
     def _weather_now(self, chat_id: str, message_id: str) -> None:
+        # The fetch is the one slow thing a text command can trigger, so it
+        # never runs inline here.
+        self._run_async(self._weather_now_blocking, chat_id, message_id)
+
+    def _weather_now_blocking(self, chat_id: str, message_id: str) -> None:
         now, recommendation = self._weather_snapshot()
         self.feishu.reply_text(message_id, render_weather(now, recommendation))
         if now is not None and recommendation is not None:

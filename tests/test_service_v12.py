@@ -55,6 +55,9 @@ def build_service(tmp_path, **overrides):
     service = Service(Settings(_env_file=None, **values))
     service.feishu = FakeFeishu()
     service.presence = Presence(online=True)
+    # Run the "slow work" seam inline so dispatch stays deterministic; the
+    # threading itself is pinned by its own test below.
+    service._run_async = lambda fn, *args: fn(*args)
     return service
 
 
@@ -179,6 +182,34 @@ def test_the_weather_branch_says_so_when_the_fetch_fails(tmp_path):
     service._weather_snapshot = lambda: (None, None)
     service._on_text_message("ou_test", "oc_1", "om_1", "天气")
     assert "没拿到" in service.feishu.replies[0][1]
+
+
+def test_the_weather_fetch_never_blocks_the_feishu_callback(tmp_path):
+    """Slow work must not run on the SDK's receive thread.
+
+    build_service() replaces the async seam for determinism, so this test puts
+    the real one back and proves _on_text_message returns before the fetch
+    finishes -- otherwise one "天气" would stall every other message and button.
+    """
+    service = build_service(tmp_path)
+    service._run_async = Service._run_async.__get__(service, Service)
+
+    def slow_snapshot():
+        time.sleep(0.4)
+        return (WeatherNow(36, 50, -1), recommend(36))
+
+    service._weather_snapshot = slow_snapshot
+
+    started = time.monotonic()
+    service._on_text_message("ou_test", "oc_1", "om_1", "天气")
+    elapsed = time.monotonic() - started
+    assert elapsed < 0.2, f"the callback blocked for {elapsed:.2f}s"
+
+    for _ in range(100):
+        if service.feishu.replies:
+            break
+        time.sleep(0.02)
+    assert "制冷 26℃" in service.feishu.replies[0][1]
 
 
 def test_a_preset_applies_immediately_by_text(tmp_path):
