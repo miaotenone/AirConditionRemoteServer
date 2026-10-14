@@ -85,10 +85,16 @@ _HELP_WORDS = ("帮助", "怎么用", "能做什么", "指令", "help")
 #: These are matched against the WHOLE normalised sentence, so a sentence that
 #: merely mentions them stays `unclear`. They are checked before the query
 #: branch because "夜间状态" contains "状态".
+#: 历史：`历史` is the menu entry the design puts under 其他; the five window
+#: words are the individual views.
 _HISTORY_WORDS = {"当前": "current", "今夜": "tonight", "一天": "day",
-                  "一周": "week", "全部": "all"}
-_NIGHT_WORDS = {"开夜间": "on", "关夜间": "off", "夜间状态": "status"}
-_WEATHER_WORDS = ("天气", "今天天气", "建议")
+                  "一周": "week", "全部": "all", "历史": "day"}
+#: `夜间` (the design's 其他 ▸ 夜间 menu entry) opens the settings card;
+#: `夜间状态` only reports. A bare word cannot say on or off, so it must not
+#: toggle -- the destructive reading of an ambiguous word is the wrong guess.
+_NIGHT_WORDS = {"开夜间": "on", "关夜间": "off", "夜间状态": "status",
+                "夜间": "open"}
+_WEATHER_WORDS = ("天气", "今天天气", "建议", "今天开多少度")
 _PRESET_OPEN_WORDS = ("预设", "设置预设")
 #: Applying a preset by text needs a verb: a bare name must never move the AC.
 _PRESET_APPLY_PREFIXES = ("套用", "用")

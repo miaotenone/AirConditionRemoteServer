@@ -295,13 +295,26 @@ def test_night_switch_and_status():
     assert (parse("夜间状态").kind, parse("夜间状态").hint) == ("night", "status")
 
 
+def test_a_bare_night_word_opens_the_settings_card_instead_of_toggling():
+    # 设计 §7.3：菜单「其他 ▸ 夜间」发的是「夜间」，它要弹出夜间设置卡。
+    # 但它说不出开还是关 —— 所以只开卡，绝不动开关。
+    assert (parse("夜间").kind, parse("夜间").hint) == ("night", "open")
+    assert parse("夜间").actions == ()
+
+
+def test_the_menu_history_word_shows_the_daily_summary():
+    # 设计 §7.3 把「历史」也放进菜单，而菜单是「显示名 = 发送文字」，
+    # 所以「历史」必须是个能认出来的词（默认看「一天」）。
+    assert (parse("历史").kind, parse("历史").hint) == ("history", "day")
+
+
 def test_night_status_is_not_swallowed_by_the_query_branch():
     # 「夜间状态」里有个「状态」，但它问的是夜间，不是空调当前状态。
     assert parse("夜间状态").kind == "night"
 
 
 def test_weather_words_are_recognised():
-    for word in ("天气", "今天天气", "建议"):
+    for word in ("天气", "今天天气", "建议", "今天开多少度"):
         assert parse(word).kind == "weather", word
 
 

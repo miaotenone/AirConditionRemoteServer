@@ -150,6 +150,22 @@ def test_a_status_query_does_not_flip_the_night_switch(tmp_path):
     assert service.feishu.sent == []          # nothing was posted either
 
 
+def test_the_night_menu_entry_opens_the_settings_card(tmp_path):
+    # 设计 §7.3：菜单「其他 ▸ 夜间」= 夜间设置卡入口（不发命令、不改开关）。
+    service = build_service(tmp_path)
+    service._on_text_message("ou_test", "oc_1", "om_1", "夜间")
+    assert service._night_enabled() is False
+    assert service.store.get_card("ou_test", "settings")
+    assert "夜间" in service.feishu.replies[0][1]
+
+
+def test_the_history_menu_entry_answers_like_a_day_query(tmp_path):
+    service = build_service(tmp_path)
+    service.store.add_env_sample(time.time(), 25, 50, True)
+    service._on_text_message("ou_test", "oc_1", "om_1", "历史")
+    assert "室温 25℃" in service.feishu.replies[0][1]
+
+
 def test_the_weather_branch_replies_and_shows_a_card(tmp_path):
     service = build_service(tmp_path)
     service._weather_snapshot = lambda: (WeatherNow(36, 50, -1), recommend(36))
