@@ -86,8 +86,19 @@
 | `{prefix}/cmd` | 发布 | 1 | 否 | 只含要改字段的 JSON |
 | `{prefix}/state` | 订阅 | 1 | **是** | 完整状态 JSON |
 | `{prefix}/status` | 订阅 | 1 | **是** | 在线/离线 JSON（LWT） |
+| `{prefix}/env` | 订阅 | 1 | **是** | DHT11 读数 `{temp,humidity,ok}` |
+| `{prefix}/hb` | 发布 | 0 | 否 | 服务心跳 `{ts}`（证明"决策者活着"）|
+| `{prefix}/event` | 订阅 | 1 | **是** | 设备事件 `{type,ts,prev}` |
 
 `prefix` 默认 `ac`，由固件配网页设定，两边必须一致。
+
+> **为什么还要 `hb`**：Mosquitto 跑在树莓派上但**是独立的 systemd 单元**，
+> 所以「MQTT 连上了」并不等于「发命令的那个服务活着」。`hb` 是设备唯一能
+> 拿到的、关于**决策者**在不在的证据（设计 18.8）。
+>
+> **`env` / `event` 是 retained 的陷阱**：broker 会把 retained 消息重放给
+> 新订阅者。服务必须只看**非 retained** 的新消息（重放的是历史，不是读数），
+> 且 `event` 只认 `ts` 在 10 分钟以内的（设计 18.6）。
 
 ### 4.2 Payload 定义
 
@@ -119,6 +130,37 @@
 **`{prefix}/status`（ESP32 → 服务）** — retained，遗嘱通道：
 - ESP32 上线时发布 `{"online":true}`；
 - 掉线时由 broker 代发遗嘱 `{"online":false}`。
+
+**`{prefix}/env`（ESP32 → 服务）** — retained，DHT11 读数（每 30s 一条）：
+
+```json
+{ "temp": 26, "humidity": 55, "ok": true }
+```
+
+| 字段 | 类型 | 取值 |
+|---|---|---|
+| `temp` | int | 室温 ℃（DHT11 分辨率 1℃）|
+| `humidity` | int | 相对湿度 % |
+| `ok` | bool | 读数是否有效；`false` 时前两项无意义 |
+
+- `ok=false` 只表示"这一次没读出来"，**服务不得把它当数据**（不入历史、不参与闭环）。
+- 服务只采信**非 retained** 的新消息；超过 10 分钟没新读数就不参与决策。
+
+**`{prefix}/hb`（服务 → ESP32）** — 不 retained，QoS0，每 30s 一条：
+
+```json
+{ "ts": 1792078200 }
+```
+
+**`{prefix}/event`（ESP32 → 服务）** — retained，设备事件（带 `ts`）：
+
+```json
+{ "type": "failsafe_off", "ts": 1792078200, "prev": {"power":1,"mode":1,"temp":24,"fan":0} }
+```
+
+- 目前只有 `failsafe_off`：设备连续失联 5 分钟后自行关机（见固件仓库设计）。
+- 服务收到**非 retained 且 `ts` 在 10 分钟内**的事件才动作；恢复策略要求
+  `prev.power == 1`（本来就关机就不必再开）。
 
 > 固件每 30s 心跳重发 `ac/state`。服务可用"最后一条 `ac/state` 的到达时间"判断数据新鲜度，超时（如 >90s）但 `status.online=true` 时提示"状态可能过期"。
 
