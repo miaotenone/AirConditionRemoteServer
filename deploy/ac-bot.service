@@ -5,10 +5,9 @@
 #
 # Install on the Pi (as the account `dirj`, whose home is /home/dirj):
 #   mkdir -p ~/project && cd ~/project
-#   git clone https://github.com/miaotenone/AirConditionRemoteServer.git
+#   git clone git@github.com:miaotenone/AirConditionRemoteServer.git   # private repo: needs a key/PAT
 #   cd AirConditionRemoteServer
-#   uv venv            # or: python3 -m venv .venv
-#   uv pip install -e .        # or: .venv/bin/pip install -e .
+#   uv sync           # versions come from uv.lock (or: python3 -m venv .venv && pip install -e .)
 #   cp .env.example .env && $EDITOR .env
 #   sudo cp deploy/ac-bot.service /etc/systemd/system/
 #   sudo systemctl daemon-reload

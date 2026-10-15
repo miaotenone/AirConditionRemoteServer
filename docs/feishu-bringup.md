@@ -31,8 +31,8 @@ ESP32 网关            192.168.8.105
 
 | 项 | 值 |
 |---|---|
-| 代码 | `~/project/AirConditionRemoteServer`（**git 检出**；`uv pip install -e .` 可编辑安装）|
-| 解释器 | `~/project/AirConditionRemoteServer/.venv`（`uv` 0.13.1 建），Python 3.10.12 |
+| 代码 | `~/project/AirConditionRemoteServer`（**git 检出**，依赖用 `uv sync` 装）|
+| 解释器 | `~/project/AirConditionRemoteServer/.venv`（`uv` 0.13.1 建，版本由 `uv.lock` 锁定），Python 3.10.12 |
 | 关键依赖 | `lark-oapi 1.7.4`（本机 Windows 侧 1.7.2，行为一致）、`paho-mqtt 2.1.0`、`pydantic 2.14.1`、`pydantic-settings 2.15.0` |
 | 服务 | `ac-bot.service`，`User=dirj`，`enabled` + `active`，`Restart=always` |
 | 依赖关系 | `Requires=mosquitto.service`（broker 停了它就一起停）|
@@ -40,22 +40,43 @@ ESP32 网关            192.168.8.105
 | 状态库 | `/var/lib/ac-bot/ac-bot.sqlite3`（systemd `StateDirectory=ac-bot`）|
 
 > **2026-10-15 迁移**：原先手工拷在 `/opt/ac-bot`（非 git 检出，代码靠 `cp -a` 覆盖），现改为
-> **git 检出**到 `~/project/AirConditionRemoteServer`，venv 改用 `uv` 建、依赖版本与旧 venv
-> 逐个对齐过（`lark-oapi 1.7.4` / `pycryptodome 3.24.1`，`uv pip freeze` 两边完全一致）。
+> **git 检出**到 `~/project/AirConditionRemoteServer`，虚拟环境改用 `uv` 建、依赖版本由
+> `uv.lock` 锁定（`lark-oapi 1.7.4` / `pycryptodome 3.24.1`；uv 默认解析会跳成 1.7.5 / 4.0.0，
+> 故在 `pyproject.toml` 的 `[tool.uv] constraint-dependencies` 里钉住）。
 > 固件仓库同样克隆在 `~/project/AirConditionRemoteCTL`，只作参考、**不参与运行**。
 > 状态库仍在 `/var/lib/ac-bot/`，预设 / 历史 / 设置都不受这次迁移影响。
-> 旧目录 `/opt/ac-bot` 已弃用（暂留作回滚兜底）。
+> 旧目录 `/opt/ac-bot` **已删除**（迁移验证通过后清理）；真要回滚，把 unit 指回旧路径
+> 加 `git checkout <旧提交>` 就够了。
 
 重装/复验：
 
 ```bash
 systemctl status ac-bot            # 应为 active (running)
 journalctl -u ac-bot -f            # 实时日志
-
-# 更新代码 —— 现在就是普通的 git pull（不再是手工拷贝 + 逐文件校验）
-cd ~/project/AirConditionRemoteServer && git pull
-sudo systemctl restart ac-bot
 ```
+
+> **更新代码（当前流程：开发机推送 + ssh 传过去）**：两个仓库都是**私有**的，树莓派上
+> 没有任何 GitHub 凭据，所以不在树莓派上 `git pull`，而是把提交打成 bundle 传过去：
+>
+> ```bash
+> # 1) 开发机（Windows PowerShell）—— 先上 GitHub，再打包传过去
+> git push origin HEAD:refs/heads/feature/presets-weather-dht11
+> git bundle create -q $env:TEMP\ac-bot.bundle HEAD
+> scp $env:TEMP\ac-bot.bundle root@100.114.10.43:/tmp/
+>
+> # 2) 树莓派 —— 快进到那个提交
+> cd ~/project/AirConditionRemoteServer
+> git fetch /tmp/ac-bot.bundle HEAD && git merge --ff-only FETCH_HEAD
+> #   （开发机若重写过历史，--ff-only 会拒绝，改用 git reset --hard FETCH_HEAD）
+> uv sync                            # 依赖有变动时才需要（uv.lock 是唯一真源）
+> sudo systemctl restart ac-bot
+> ```
+>
+> 想让树莓派直接 `git pull` 也行，但要先给它配凭据：`dirj` 下已生成
+> `~/.ssh/id_ed25519_github`，把 `.pub` 贴到两个仓库的 *Settings → Deploy keys*（**只读**），
+> 再把 remote 换成 `git@github.com:miaotenone/<repo>.git`。不配不影响上面的流程。
+>
+> ⚠️ `git clone`（或换机器重装）**不会**带来 `.env` —— 那是凭据，必须手工拷。
 
 ## 3. 飞书侧事实（应用与标识）
 

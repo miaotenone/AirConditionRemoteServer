@@ -258,7 +258,7 @@ v1.2 起还多了**四个数据类入口**。它们**不产生空调动作**（�
 1. **建飞书自建应用**：照 [`docs/feishu-setup.md`](docs/feishu-setup.md) 拿到 `App ID` /
    `App Secret` / `OWNER_OPEN_ID`；订阅方式切成**长连接**；订阅 `im.message.receive_v1`
    与卡片回调 `card.action.trigger`。
-2. **部署到树莓派**：`~/project/AirConditionRemoteServer`（git clone）+ uv venv + `.env`，按
+2. **部署到树莓派**：`~/project/AirConditionRemoteServer`（git clone）+ `uv sync` + `.env`，按
    [`deploy/ac-bot.service`](deploy/ac-bot.service) 上 systemd（注意 `User=dirj`）。
 3. **首次联调**（预计要来回几轮）：
    - 对着真机微调卡片排版（`column_set` 的宽度、按钮换行）；

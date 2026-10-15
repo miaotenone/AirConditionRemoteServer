@@ -13,6 +13,12 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8"]
 
+[tool.uv]
+# Pin the pair that is verified in production. uv's default resolution drifts both
+# (lark-oapi 1.7.4 -> 1.7.5, pycryptodome 3.24.1 -> 4.0.0); rebuilding the venv
+# must not silently change what runs on the Pi. uv.lock is the source of truth.
+constraint-dependencies = ["lark-oapi==1.7.4", "pycryptodome==3.24.1"]
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
