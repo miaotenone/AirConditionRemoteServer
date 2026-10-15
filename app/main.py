@@ -393,21 +393,30 @@ class Service:
     def _history_answer(self, window: str, chat_id: str, message_id: str) -> None:
         """A history query: always the line of text, plus the card below it.
 
-        The card is sent to the bottom (a menu tap comes from wherever the user
-        is standing) and only when the window has a shape to draw -- one point
-        is not a line, and "还没有记录" already says everything there is to say.
+        The card goes to the bottom (a menu tap comes from wherever the user is
+        standing) and only when the window has a shape: one reading is not a
+        line, and a chart-less card would just be a second copy of the sentence
+        we already sent. There is nothing to keep up to date in that case.
         """
         summary, points, target = self._history_view(window)
         self.feishu.reply_text(message_id, render_history(summary, target=target))
-        self._history_card(summary, points, target, chat_id, to_bottom=True)
-
-    def _history_card(self, summary, points, target, chat_id: str, *,
-                      prefer: str | None = None, to_bottom: bool = False) -> None:
         if len(points) < 2:
             return
         self._show_card(CARD_HISTORY, chat_id,
                         build_history_card(summary, target=target, points=points),
-                        prefer=prefer, to_bottom=to_bottom)
+                        to_bottom=True)
+
+    def _history_switch(self, window: str, chat_id: str, message_id: str) -> None:
+        """A window button: always repaint the card the finger is on.
+
+        Even a window with nothing in it has to answer -- a click that changes
+        nothing on screen reads as a broken button, and the highlighter moving
+        to the window they asked for is the answer (design 18.1).
+        """
+        summary, points, target = self._history_view(window)
+        self._show_card(CARD_HISTORY, chat_id,
+                        build_history_card(summary, target=target, points=points),
+                        prefer=message_id)
 
     def _night_switch(self, mode: str) -> str:
         if mode == "on":
@@ -568,8 +577,7 @@ class Service:
             self.store.set_setting(S_NIGHT_ENABLED, "1" if ui_action.target else "0")
             self._show_settings_card(chat_id, status="✅ 已更新", prefer=message_id)
         elif kind == "history_switch":
-            summary, points, target = self._history_view(ui_action.window)
-            self._history_card(summary, points, target, chat_id, prefer=message_id)
+            self._history_switch(ui_action.window, chat_id, message_id)
         elif kind == "weather_exec":
             self._execute_weather(chat_id, message_id)
         elif kind == "weather_ignore":

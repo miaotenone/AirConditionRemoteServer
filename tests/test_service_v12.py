@@ -191,7 +191,7 @@ def _seed_history(service, count=6, *, step=300):
 def test_a_history_query_answers_with_a_chart_below_the_text(tmp_path):
     service = build_service(tmp_path)
     _seed_history(service)
-    service._on_text_message("ou_test", "oc_1", "om_1", "一天")
+    service._on_text_message("ou_test", "oc_1", "om_1", "一周")
     assert "室温" in service.feishu.replies[0][1]        # the text reply is unchanged
 
     card_id = service.store.get_card("ou_test", "history")
@@ -212,7 +212,7 @@ def test_history_posts_no_card_before_there_is_a_shape(tmp_path):
 def test_a_history_window_button_repaints_that_card_in_place(tmp_path):
     service = build_service(tmp_path)
     _seed_history(service)
-    service._on_text_message("ou_test", "oc_1", "om_1", "一天")
+    service._on_text_message("ou_test", "oc_1", "om_1", "一周")
     card_id = service.store.get_card("ou_test", "history")
     assert service.feishu.patched == []
 
@@ -220,6 +220,21 @@ def test_a_history_window_button_repaints_that_card_in_place(tmp_path):
                             {"a": "history_switch", "v": "week"}, None)
     assert service.feishu.patched == [card_id]
     assert service.feishu.sent == ["oc_1"]               # not re-posted below
+
+
+def test_a_window_button_answers_even_when_that_window_has_no_shape(tmp_path):
+    """Silence reads as a broken button: `当前` is one reading, not a line."""
+    service = build_service(tmp_path)
+    _seed_history(service)
+    service._on_text_message("ou_test", "oc_1", "om_1", "一周")
+    card_id = service.store.get_card("ou_test", "history")
+    assert card_id
+
+    service._on_card_action("ou_test", "oc_1", card_id,
+                            {"a": "history_switch", "v": "current"}, None)
+    assert service.feishu.patched == [card_id]
+    repainted = service.feishu.cards[card_id]
+    assert not [e for e in repainted["body"]["elements"] if e["tag"] == "chart"]
 
 
 # ------------------------------------------------- menu taps answer at the bottom
