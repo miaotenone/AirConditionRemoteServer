@@ -208,17 +208,22 @@ python -m app.main
 **机器人能力 → 机器人自定义菜单** → **菜单状态**开启 → 展示形式选**悬浮菜单**（悬浮在输入框
 上方、不影响输入；另一种「可切换菜单」在菜单与输入框之间切换）。
 
-> **补充：机器人菜单其实有 OpenAPI（2026-10-15 实测），但本项目用不了**
-> - 接口：`PATCH /open-apis/application/v7/applications/:app_id/ability`，body 里
->   `bot.bot_menu_enable` / `bot.bot_menus[]` / `bot.bot_menu_display_strategy` 就是这份菜单；
->   `lark_oapi` 对应 `client.application.v7.application_ability.patch`（`AppAbilityBot` + `BotMenuNode`），
->   发布是 `POST …/applications/:app_id/publish`。
-> - 用不了的原因有二：① 需要 `application:application:self_manage`（或 `admin:app.info:readonly`）
->   权限，本应用**没开** —— 实测 `application.v6.application.get` 直接回
->   `99991672 Access denied`；② 该接口**只有 patch、没有 get**，读不到现有菜单，只能整棵树覆盖写，
->   会把控制台里点选的图标丢掉。
-> - 结论：**一次性改菜单走控制台更快**（不用申请权限、不用重新发版审批）；
->   只有当菜单要频繁变（比如把预设名直接铺成菜单项）才值得开 self_manage 去脚本化。
+> **补充：机器人菜单有 OpenAPI（2026-10-15 实测），但仍建议用控制台**
+> - **读**：`GET /open-apis/application/v6/applications/:app_id/app_versions`，
+>   取当前线上版本的 `ability.bot.bot_menus`（**扁平**数组，带 `menu_id` /
+>   `parent_menu_id` / `sort`）。`/ability` 自己没有 GET，菜单只能从版本里读。
+> - **写**：`PATCH /open-apis/application/v7/applications/:app_id/ability`，body 是
+>   `bot.enable`（**必填**）+ `bot.bot_menu_enable` + `bot.bot_menu_display_strategy`
+>   + `bot.bot_menus[]`。**读写形状不一样**：写是**嵌套**的 —— `bot_menus` 只放
+>   **顶层分组**（最多 10 个），子项放进分组的 `children`，且没有 `menu_id` /
+>   `parent_menu_id` / `sort`（顺序＝数组顺序）。把读出来的扁平数组原样回写会被判
+>   `field validation failed: the max len is 10`（它把 23 个节点全当成顶层菜单）。
+>   `menu_content_type`：`3` = 分组容器、`4` = 发送文字消息。
+> - **权限**：读只要 `application:application:self_manage`；**写还必须
+>   `application:application:patch`**（本应用没开，实测 `99991672`）。
+> - 结论：**一次性改菜单走控制台更快**（不用再加权限、不用重新发版）。
+>   要脚本化就用 `scripts/feishu_menu.py`：默认只出 diff，`--apply` 才写，
+>   `--show` 导出当前菜单 —— 控制台改完拿它**核对**最省事。
 
 ### 菜单表（显示名 = 发送的文字，逐字照抄，不要加空格）
 
