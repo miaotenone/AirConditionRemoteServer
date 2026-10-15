@@ -33,6 +33,7 @@ CARD_REMOTE = "remote"
 CARD_PRESET = "preset"
 CARD_SETTINGS = "settings"
 CARD_WEATHER = "weather"
+CARD_HISTORY = "history"
 
 _CARD_SCHEMA = """
 CREATE TABLE IF NOT EXISTS card (

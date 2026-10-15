@@ -26,6 +26,7 @@ passes the already-formatted ``updated_at`` clock string.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Mapping, Optional, Sequence
 
 from .env import Summary
@@ -59,7 +60,7 @@ _STALE = "状态可能过期：设备在线，但已超过 90 秒没有上报状
 # ------------------------------------------------------------------ building
 
 
-def _button(label: str, action: str, value: int, *,
+def _button(label: str, action: str, value: int | str, *,
             active: bool = False, disabled: bool = False, size: str = "medium") -> dict:
     """One callback button. `active` is rendered as the highlighted choice."""
     button = {
@@ -417,10 +418,86 @@ def build_weather_card(now: Optional[WeatherNow],
 
 
 def build_history_card(summary: Summary, *, target: Optional[int] = None,
-                       text: str = "") -> dict:
-    """A read-only view of one history window (the text reply, on a card)."""
+                       text: str = "", points: Sequence = ()) -> dict:
+    """One history window: the summary line, its chart, and the window switcher.
+
+    ``points`` are already-downsampled `env.ChartPoint`s. Fewer than two of them
+    is not a line, so the card stays text-only instead of drawing a lone dot.
+    """
     from .replies import render_history  # local import: avoids an import cycle
 
     content = text or render_history(summary, target=target)
-    return _card_shell(HISTORY_TITLE, "indigo",
-                       [{"tag": "markdown", "content": content}])
+    elements: list = [{"tag": "markdown", "content": content}]
+    if len(points) >= 2:
+        elements.extend(_history_charts(list(points), target))
+    elements.append(_row([
+        _button(label, "history_switch", window, active=(window == summary.window))
+        for window, label in HISTORY_WINDOWS
+    ]))
+    return _card_shell(HISTORY_TITLE, "indigo", elements)
+
+
+#: The chart colours (design 18.11). Explicit rather than left to the card's
+#: `color_theme`: "the room is warm, the humidity is cool" is the whole point of
+#: the picture, and it has to read the same in light and dark clients.
+TEMP_LINE = "#E8A33D"
+HUMID_LINE = "#3E8FD8"
+TARGET_LINE = "#9AA4B2"
+
+#: The five views, in the order they sit under the chart (design 7.2).
+HISTORY_WINDOWS = (("current", "当前"), ("tonight", "今夜"), ("day", "一天"),
+                   ("week", "一周"), ("all", "全部"))
+
+
+def _axis_clock(at: float, span: float) -> str:
+    """A short axis label: just the clock for a day, the date too for longer.
+
+    The first draft labelled all 288 of a day's points "MM-DD HH:MM" and the
+    axis turned into a wall of text -- a day needs 5 characters, not 11.
+    """
+    moment = datetime.fromtimestamp(at)
+    if span <= 26 * 3600:
+        return moment.strftime("%H:%M")
+    return moment.strftime("%m-%d %H:%M")
+
+
+def _history_chart(title: str, colours: list, values: list, *, series: bool) -> dict:
+    """One line chart. ``series`` splits the values by their ``metric`` field."""
+    spec = {
+        "type": "line",
+        "title": {"text": title},
+        "data": {"values": values},
+        "xField": "time",
+        "yField": "value",
+        "color": colours,
+        "line": {"style": {"lineWidth": 2}},
+        "point": {"visible": len(values) <= 24},
+    }
+    if series:
+        spec["seriesField"] = "metric"
+        spec["legends"] = {"visible": True, "orient": "bottom"}
+    return {"tag": "chart", "aspect_ratio": "2:1", "chart_spec": spec}
+
+
+def _history_charts(points: list, target: Optional[int]) -> list:
+    """Temperature always; humidity when we have it; the target as a flat line."""
+    span = points[-1].at - points[0].at
+    labels = [_axis_clock(point.at, span) for point in points]
+
+    charts = []
+    temperatures = [{"time": label, "value": point.temp, "metric": "室温"}
+                    for label, point in zip(labels, points)]
+    colours = [TEMP_LINE]
+    if target is not None:
+        temperatures += [{"time": label, "value": target, "metric": "目标"}
+                         for label in labels]
+        colours.append(TARGET_LINE)
+    charts.append(_history_chart("室温 ℃", colours, temperatures,
+                                 series=target is not None))
+
+    humidity = [{"time": label, "value": point.humidity, "metric": "湿度"}
+                for label, point in zip(labels, points)
+                if point.humidity is not None]
+    if humidity:
+        charts.append(_history_chart("湿度 %", [HUMID_LINE], humidity, series=False))
+    return charts

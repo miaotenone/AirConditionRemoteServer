@@ -85,6 +85,18 @@ def test_a_form_submit_carries_the_form_values():
     assert action == UIAction(kind="preset_save", form={"name": "夏天", "temp": "26"})
 
 
+def test_a_history_button_carries_its_window():
+    assert normalize_ui_action(value={"a": "history_switch", "v": "week"}) == \
+        UIAction(kind="history_switch", window="week")
+
+
+def test_an_unknown_history_window_is_rejected():
+    # A window we cannot draw is not guessed at -- the click is ignored.
+    assert normalize_ui_action(value={"a": "history_switch", "v": "someday"}) is None
+    assert normalize_ui_action(value={"a": "history_switch", "v": 7}) is None
+    assert normalize_ui_action(value={"a": "history_switch"}) is None
+
+
 def test_a_form_submit_without_values_is_rejected():
     assert normalize_ui_action(value={"a": "preset_save"}) is None
 

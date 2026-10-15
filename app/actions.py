@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional
 
+from .env import WINDOWS
 from .state import ALLOWED_ACTIONS, TEMP_MAX, TEMP_MIN
 
 #: UI actions that carry no id -- they just open something (design 18.2).
@@ -24,6 +25,8 @@ UI_ID_ACTIONS = ("preset_edit", "preset_delete", "preset_apply")
 UI_TOGGLE_ACTIONS = ("night_toggle",)
 #: Form-submit buttons: the payload is in `action.form_value`, not `v`.
 UI_FORM_ACTIONS = ("preset_save", "settings_save")
+#: The history card's window switcher: its `v` is a window name, not a number.
+UI_WINDOW_ACTIONS = ("history_switch",)
 
 UI_BUTTON_ACTIONS = UI_PLAIN_ACTIONS + UI_ID_ACTIONS + UI_TOGGLE_ACTIONS
 
@@ -39,6 +42,7 @@ class UIAction:
     kind: str
     target: int = 0
     form: Mapping[str, Any] = field(default_factory=dict)
+    window: str = ""
 
 
 def normalize_ui_action(*, value: Any = None,
@@ -46,8 +50,9 @@ def normalize_ui_action(*, value: Any = None,
     """Return the UI action a card click asked for, or ``None``.
 
     ``preset_save`` / ``settings_save`` arrive on a ``form_submit`` button and
-    read their fields from ``form_value``; everything else is a plain button
-    whose ``v`` is an id or a toggle state.
+    read their fields from ``form_value``; ``history_switch`` carries a window
+    name; everything else is a plain button whose ``v`` is an id or a toggle
+    state.
     """
     if not isinstance(value, dict):
         return None
@@ -57,6 +62,12 @@ def normalize_ui_action(*, value: Any = None,
         if not isinstance(form_value, dict) or not form_value:
             return None
         return UIAction(kind=action, form=dict(form_value))
+
+    if action in UI_WINDOW_ACTIONS:
+        window = value.get("v")
+        if not isinstance(window, str) or window not in WINDOWS:
+            return None      # an unknown window is ignored, never guessed at
+        return UIAction(kind=action, window=window)
 
     if action in UI_BUTTON_ACTIONS:
         return UIAction(kind=action, target=_as_int(value.get("v")) or 0)

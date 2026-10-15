@@ -326,3 +326,100 @@ def test_the_new_cards_are_all_json_serialisable():
                  build_weather_card(WeatherNow(outdoor_c=30), recommend(30)),
                  build_history_card(Summary(window="all"))):
         json.dumps(card)
+
+
+# ---------------------------------------------------------- the history chart
+# 2026-10-15：历史卡从「只有一行字」变成「一行字 + 折线图 + 五个窗口按钮」。
+# 图里只画真读到的样本（至少两个点才成线），横轴标签按窗口长短换格式。
+
+
+def _points(count=3, *, start=dt.datetime(2026, 10, 15, 9, 0), step=300):
+    from app.env import ChartPoint
+
+    return tuple(
+        ChartPoint(at=(start + dt.timedelta(seconds=step * i)).timestamp(),
+                   temp=25 + i, humidity=50 + i)
+        for i in range(count)
+    )
+
+
+def charts(card):
+    return [e for e in elements(card) if e.get("tag") == "chart"]
+
+
+def test_a_history_card_draws_one_line_per_measurement():
+    from app.env import Summary
+
+    card = build_history_card(Summary(window="day", count=3), points=_points(3))
+    drawn = charts(card)
+    assert [c["chart_spec"]["type"] for c in drawn] == ["line", "line"]
+    assert [v["value"] for v in drawn[0]["chart_spec"]["data"]["values"]] == [25, 26, 27]
+    assert [v["value"] for v in drawn[1]["chart_spec"]["data"]["values"]] == [50, 51, 52]
+
+
+def test_a_history_card_draws_no_line_for_a_single_reading():
+    from app.env import Summary
+
+    card = build_history_card(Summary(window="current", count=1), points=_points(1))
+    assert charts(card) == []
+
+
+def test_a_history_card_carries_the_five_windows():
+    from app.env import Summary
+
+    card = build_history_card(Summary(window="day", count=3), points=_points(3))
+    assert button_values(card, "history_switch") == \
+        {"current", "tonight", "day", "week", "all"}
+
+
+def test_the_window_the_user_asked_for_is_the_highlighted_button():
+    from app.env import Summary
+
+    card = build_history_card(Summary(window="week", count=3), points=_points(3))
+    active = [b["text"]["content"] for b in buttons(card, "history_switch")
+              if b["type"] == "primary"]
+    assert active == ["一周"]
+
+
+def test_the_target_is_drawn_against_the_room_temperature():
+    from app.env import Summary
+
+    card = build_history_card(Summary(window="day", count=3), points=_points(3),
+                              target=26)
+    spec = charts(card)[0]["chart_spec"]
+    assert spec["seriesField"] == "metric"
+    assert {v["metric"] for v in spec["data"]["values"]} == {"室温", "目标"}
+    assert [v["value"] for v in spec["data"]["values"] if v["metric"] == "目标"] \
+        == [26, 26, 26]
+
+
+def test_a_day_chart_labels_the_axis_with_the_clock_only():
+    from app.env import Summary
+
+    card = build_history_card(Summary(window="day", count=3), points=_points(3))
+    labels = [v["time"] for v in charts(card)[0]["chart_spec"]["data"]["values"]]
+    assert labels == ["09:00", "09:05", "09:10"]
+
+
+def test_a_long_window_labels_the_axis_with_the_date_too():
+    from app.env import Summary
+
+    card = build_history_card(Summary(window="week", count=48),
+                              points=_points(48, step=3 * 3600))
+    labels = [v["time"] for v in charts(card)[0]["chart_spec"]["data"]["values"]]
+    assert labels[0] == "10-15 09:00"
+
+
+def test_a_history_card_stays_well_under_the_message_cap():
+    """A week of 5-minute rows is 2016 samples; the card carries a shape instead.
+
+    Feishu rejects a card message over 30 KB, and 2016 axis labels are
+    unreadable anyway -- so the service downsamples before it gets here. This
+    is the worst case: a week (11-character labels), a target line, and
+    humidity on top. Measured on a live send: 2016 raw points would be ~77 KB.
+    """
+    from app.env import CHART_POINTS, Summary
+
+    card = build_history_card(Summary(window="week", count=2016), target=26,
+                              points=_points(CHART_POINTS, step=3 * 3600))
+    assert len(json.dumps(card, ensure_ascii=False).encode("utf-8")) < 16 * 1024

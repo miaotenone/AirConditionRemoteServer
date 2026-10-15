@@ -10,7 +10,8 @@ The firmware publishes ``ac/env``; the service records it and answers "当前 /
 
 import datetime as dt
 
-from app.env import EnvReading, EnvSample, aggregate, parse_env
+from app.env import (CHART_POINTS, EnvReading, EnvSample, aggregate,
+                     chart_points, parse_env)
 
 
 def _at(*parts) -> float:
@@ -116,3 +117,72 @@ def test_an_empty_window_reports_itself_as_empty():
     assert summary.count == 0
     assert summary.empty is True
     assert summary.temp_avg is None
+
+
+# ------------------------------------------------------------- chart points
+# 2026-10-15：历史卡片要画折线。图不能把 5 分钟一条的原样端上去 —— 一天 288 条、
+# 一周 2016 条，飞书整张卡的上限是 30 KB，而且这么多点眼睛也读不出来。所以先把
+# 窗口压成至多 CHART_POINTS 个桶，每桶取均值；**没读数的桶不补点**，图里不能出现
+# 没测过的温度。
+
+
+def test_chart_points_are_capped_however_long_the_window_is():
+    now = dt.datetime(2026, 10, 15, 23, 59)
+    rows = _samples(*[(_at(2026, 10, 15, 0, 0) + 300 * i, 25, 50, True)
+                      for i in range(288)])
+    points = chart_points(rows, now=now, window="day")
+    assert 2 <= len(points) <= CHART_POINTS
+    assert [p.at for p in points] == sorted(p.at for p in points)
+
+
+def test_chart_points_average_each_bucket():
+    now = dt.datetime(2026, 10, 15, 23, 59)
+    # Two hours of 5-minute rows alternating 24/26 -> every bucket averages 25.
+    rows = _samples(*[(_at(2026, 10, 15, 0, 0) + 300 * i, 24 + 2 * (i % 2), 50, True)
+                      for i in range(24)])
+    points = chart_points(rows, now=now, window="day", max_points=4)
+    assert [p.temp for p in points] == [25, 25, 25, 25]
+    assert [p.humidity for p in points] == [50, 50, 50, 50]
+
+
+def test_chart_points_leave_out_buckets_with_no_readings():
+    """A silent device must leave a gap, not a line drawn across thin air."""
+    now = dt.datetime(2026, 10, 15, 23, 59)
+    rows = _samples(
+        *[(_at(2026, 10, 15, 0, 0) + 300 * i, 25, 50, True) for i in range(12)],
+        *[(_at(2026, 10, 15, 12, 0) + 300 * i, 27, 50, True) for i in range(12)],
+    )
+    points = chart_points(rows, now=now, window="day", max_points=12)
+    assert len(points) == 2                       # one hour here, one hour there
+    assert [p.temp for p in points] == [25, 27]
+
+
+def test_chart_points_ignore_failed_reads():
+    now = dt.datetime(2026, 10, 15, 12, 0)
+    rows = _samples((_at(2026, 10, 15, 9, 0), 25, 50, True),
+                    (_at(2026, 10, 15, 9, 5), 99, 99, False))
+    points = chart_points(rows, now=now, window="day", max_points=1)
+    assert [(p.temp, p.humidity) for p in points] == [(25, 50)]
+
+
+def test_chart_points_for_the_current_window_are_the_latest_reading():
+    now = dt.datetime(2026, 10, 15, 12, 0)
+    rows = _samples((_at(2026, 10, 15, 11, 0), 25, 50, True),
+                    (_at(2026, 10, 15, 11, 55), 27, 52, True))
+    points = chart_points(rows, now=now, window="current")
+    assert [p.temp for p in points] == [27]
+
+
+def test_chart_points_share_the_summary_window():
+    """The picture and the line of text must describe the same readings."""
+    now = dt.datetime(2026, 10, 15, 12, 0)
+    rows = _samples((_at(2026, 10, 14, 20, 0), 30, 50, True),    # yesterday
+                    (_at(2026, 10, 15, 9, 0), 25, 50, True))     # today
+    summary = aggregate(rows, now=now, window="day")
+    points = chart_points(rows, now=now, window="day")
+    assert summary.count == len(points) == 1
+    assert points[0].temp == 25
+
+
+def test_chart_points_of_nothing_are_empty():
+    assert chart_points([], now=dt.datetime(2026, 10, 15, 12, 0), window="day") == ()

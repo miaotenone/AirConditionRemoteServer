@@ -32,6 +32,7 @@ from .cards import (
     HEADER_TITLE,
     MENU_MOVED_NOTICE_TEXT,
     build_card,
+    build_history_card,
     build_moved_notice_card,
     build_preset_card,
     build_preset_form,
@@ -40,7 +41,7 @@ from .cards import (
 )
 from .config import Settings
 from .control import LoopState, MANUAL_YIELD_S, decide
-from .env import aggregate, parse_env
+from .env import aggregate, chart_points, parse_env
 from .feishu_client import FeishuClient
 from .intent import parse
 from .mqtt_client import MqttBridge
@@ -73,6 +74,7 @@ from .state import (
     presence_from_status,
 )
 from .store import (
+    CARD_HISTORY,
     CARD_PRESET,
     CARD_REMOTE,
     CARD_SETTINGS,
@@ -362,7 +364,7 @@ class Service:
     def _handle_context_intent(self, intent, chat_id: str, message_id: str) -> None:
         """Answer the four data-driven kinds (design 9.4)."""
         if intent.kind == "history":
-            self.feishu.reply_text(message_id, self._history_text(intent.hint))
+            self._history_answer(intent.hint, chat_id, message_id)
         elif intent.kind == "night":
             self.feishu.reply_text(message_id, self._night_switch(intent.hint))
         elif intent.kind == "weather":
@@ -370,13 +372,42 @@ class Service:
         elif intent.kind == "preset":
             self._preset_intent(intent, chat_id, message_id)
 
-    def _history_text(self, window: str) -> str:
-        summary = aggregate(
-            self.store.env_samples(), now=datetime.now(), window=window,
-            night_start=self._night_start(), night_end=self._night_end(),
-        )
+    def _history_view(self, window: str):
+        """``(summary, chart points, target)`` for one window.
+
+        One reader for text and picture: if these two ever disagree the card
+        would contradict the sentence sitting right above it.
+        """
+        samples = self.store.env_samples()
+        now = datetime.now()
+        start, end = self._night_start(), self._night_end()
         target = self._night_target() if self._night_enabled() else None
-        return render_history(summary, target=target)
+        return (
+            aggregate(samples, now=now, window=window,
+                      night_start=start, night_end=end),
+            chart_points(samples, now=now, window=window,
+                         night_start=start, night_end=end),
+            target,
+        )
+
+    def _history_answer(self, window: str, chat_id: str, message_id: str) -> None:
+        """A history query: always the line of text, plus the card below it.
+
+        The card is sent to the bottom (a menu tap comes from wherever the user
+        is standing) and only when the window has a shape to draw -- one point
+        is not a line, and "还没有记录" already says everything there is to say.
+        """
+        summary, points, target = self._history_view(window)
+        self.feishu.reply_text(message_id, render_history(summary, target=target))
+        self._history_card(summary, points, target, chat_id, to_bottom=True)
+
+    def _history_card(self, summary, points, target, chat_id: str, *,
+                      prefer: str | None = None, to_bottom: bool = False) -> None:
+        if len(points) < 2:
+            return
+        self._show_card(CARD_HISTORY, chat_id,
+                        build_history_card(summary, target=target, points=points),
+                        prefer=prefer, to_bottom=to_bottom)
 
     def _night_switch(self, mode: str) -> str:
         if mode == "on":
@@ -536,6 +567,9 @@ class Service:
         elif kind == "night_toggle":
             self.store.set_setting(S_NIGHT_ENABLED, "1" if ui_action.target else "0")
             self._show_settings_card(chat_id, status="✅ 已更新", prefer=message_id)
+        elif kind == "history_switch":
+            summary, points, target = self._history_view(ui_action.window)
+            self._history_card(summary, points, target, chat_id, prefer=message_id)
         elif kind == "weather_exec":
             self._execute_weather(chat_id, message_id)
         elif kind == "weather_ignore":

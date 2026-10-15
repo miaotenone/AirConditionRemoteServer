@@ -177,6 +177,51 @@ def test_the_history_menu_entry_answers_like_a_day_query(tmp_path):
     assert "室温 25℃" in service.feishu.replies[0][1]
 
 
+# --------------------------------------------------------- the history chart
+# 2026-10-15：历史查询除了那行文字，还要在下面放一张带折线图的卡；卡上的五个
+# 窗口按钮**原地**重画（用户正看着那张卡），发一句话则把新卡送到最下面。
+
+
+def _seed_history(service, count=6, *, step=300):
+    base = time.time() - count * step
+    for index in range(count):
+        service.store.add_env_sample(base + index * step, 25 + index % 3, 50, True)
+
+
+def test_a_history_query_answers_with_a_chart_below_the_text(tmp_path):
+    service = build_service(tmp_path)
+    _seed_history(service)
+    service._on_text_message("ou_test", "oc_1", "om_1", "一天")
+    assert "室温" in service.feishu.replies[0][1]        # the text reply is unchanged
+
+    card_id = service.store.get_card("ou_test", "history")
+    assert card_id
+    drawn = [e for e in service.feishu.cards[card_id]["body"]["elements"]
+             if e["tag"] == "chart"]
+    assert len(drawn) == 2
+
+
+def test_history_posts_no_card_before_there_is_a_shape(tmp_path):
+    """One reading is not a line: until there are two, the text stands alone."""
+    service = build_service(tmp_path)
+    service.store.add_env_sample(time.time(), 26, 50, True)
+    service._on_text_message("ou_test", "oc_1", "om_1", "一天")
+    assert service.feishu.sent == []
+
+
+def test_a_history_window_button_repaints_that_card_in_place(tmp_path):
+    service = build_service(tmp_path)
+    _seed_history(service)
+    service._on_text_message("ou_test", "oc_1", "om_1", "一天")
+    card_id = service.store.get_card("ou_test", "history")
+    assert service.feishu.patched == []
+
+    service._on_card_action("ou_test", "oc_1", card_id,
+                            {"a": "history_switch", "v": "week"}, None)
+    assert service.feishu.patched == [card_id]
+    assert service.feishu.sent == ["oc_1"]               # not re-posted below
+
+
 # ------------------------------------------------- menu taps answer at the bottom
 # 2026-10-15: 点菜单「预设」时服务端把老卡「原地 patch」。卡在聊天上方，用户站在
 # 最下面，回执却写着「预设卡片 👇」——看起来就是「什么都没发生」。菜单入口一律
