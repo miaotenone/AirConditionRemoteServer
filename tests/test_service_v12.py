@@ -10,9 +10,11 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from app.cards import SETTINGS_TITLE
 from app.config import Settings
 from app.env import EnvReading
 from app.main import Service
+from app.preset import Preset
 from app.state import AC_FAN, AC_MODE, AcState, Presence
 from app.weather import WeatherNow, recommend
 
@@ -45,7 +47,12 @@ class FakeFeishu:
         return True
 
     def recall_card(self, message_id):
-        return True
+        # 菜单入口的卡片要「移动到最后」：先发新的，再撤回旧的（设计 D22）。
+        # 置 recall_succeeds=False 模拟撤回窗口过了。
+        if getattr(self, "recalled", None) is None:
+            self.recalled = []
+        self.recalled.append(message_id)
+        return getattr(self, "recall_succeeds", True)
 
 
 def build_service(tmp_path, **overrides):
@@ -167,6 +174,70 @@ def test_the_history_menu_entry_answers_like_a_day_query(tmp_path):
     service.store.add_env_sample(time.time(), 25, 50, True)
     service._on_text_message("ou_test", "oc_1", "om_1", "历史")
     assert "室温 25℃" in service.feishu.replies[0][1]
+
+
+# ------------------------------------------------- menu taps answer at the bottom
+# 2026-10-15: 点菜单「预设」时服务端把老卡「原地 patch」。卡在聊天上方，用户站在
+# 最下面，回执却写着「预设卡片 👇」——看起来就是「什么都没发生」。菜单入口一律
+# 重新发一张到最新位置（跟 D22 召唤遥控卡同一套动作）。
+
+def test_a_preset_menu_tap_posts_a_fresh_card_at_the_bottom(tmp_path):
+    service = build_service(tmp_path)
+    service.store.save_preset(Preset(id=1, name="夏天", temp=26))
+
+    service._on_text_message("ou_test", "oc_1", "om_1", "预设")
+    first = service.store.get_card("ou_test", "preset")
+    assert first, "第一次点也要出卡"
+
+    service._on_text_message("ou_test", "oc_1", "om_2", "预设")
+    assert service.store.get_card("ou_test", "preset") != first
+    assert len(service.feishu.sent) == 2, "第二次是新发一张，不是原地 patch"
+    assert service.feishu.patched == []
+
+
+def test_a_menu_tap_retires_the_previous_card(tmp_path):
+    service = build_service(tmp_path)
+    service._on_text_message("ou_test", "oc_1", "om_1", "夜间")
+    first = service.store.get_card("ou_test", "settings")
+
+    service._on_text_message("ou_test", "oc_1", "om_2", "夜间")
+    assert service.feishu.recalled == [first], "旧卡撤回了，聊天里只留最新那张"
+
+
+def test_a_menu_tap_leaves_a_notice_when_the_old_card_cannot_be_recalled(tmp_path):
+    service = build_service(tmp_path)
+    service._on_text_message("ou_test", "oc_1", "om_1", "夜间")
+    first = service.store.get_card("ou_test", "settings")
+    service.feishu.recall_succeeds = False            # 超过撤回窗口
+
+    service._on_text_message("ou_test", "oc_1", "om_2", "夜间")
+    assert first in service.feishu.patched
+    notice = service.feishu.cards[first]
+    assert "最新位置" in notice["body"]["elements"][0]["content"]
+    assert notice["header"]["title"]["content"] == SETTINGS_TITLE
+
+
+def test_the_weather_menu_tap_posts_a_fresh_card_too(tmp_path):
+    service = build_service(tmp_path)
+    service._weather_snapshot = lambda: (WeatherNow(36, 50, -1), recommend(36))
+
+    service._on_text_message("ou_test", "oc_1", "om_1", "天气")
+    first = service.store.get_card("ou_test", "weather")
+    service._on_text_message("ou_test", "oc_1", "om_2", "天气")
+    assert service.store.get_card("ou_test", "weather") != first
+
+
+def test_a_card_button_still_answers_in_place(tmp_path):
+    """卡片按钮是「手指正指着这张卡」，必须原地更新，不能又发一张。"""
+    service = build_service(tmp_path)
+    service._on_text_message("ou_test", "oc_1", "om_1", "预设")
+    card_id = service.store.get_card("ou_test", "preset")
+    sent_before = len(service.feishu.sent)
+
+    service._on_card_action("ou_test", "oc_1", card_id,
+                            {"a": "preset_new", "v": 0}, None)
+    assert card_id in service.feishu.patched
+    assert len(service.feishu.sent) == sent_before, "没有多发消息"
 
 
 def test_the_weather_branch_replies_and_shows_a_card(tmp_path):

@@ -29,6 +29,8 @@ from datetime import datetime
 
 from .actions import normalize_action, normalize_ui_action
 from .cards import (
+    HEADER_TITLE,
+    MENU_MOVED_NOTICE_TEXT,
     build_card,
     build_moved_notice_card,
     build_preset_card,
@@ -372,7 +374,7 @@ class Service:
                             target=self._night_target(),
                             start=self._night_start(), end=self._night_end())
         if mode != "status":
-            self._show_settings_card(self._chat_id())
+            self._show_settings_card(self._chat_id(), to_bottom=True)
         return text
 
     def _run_async(self, fn, *args) -> None:
@@ -395,12 +397,13 @@ class Service:
         self.feishu.reply_text(message_id, render_weather(now, recommendation))
         if now is not None and recommendation is not None:
             self._show_card(CARD_WEATHER, chat_id,
-                            build_weather_card(now, recommendation))
+                            build_weather_card(now, recommendation),
+                            to_bottom=True)
 
     def _preset_intent(self, intent, chat_id: str, message_id: str) -> None:
         hint = intent.hint or ""
         if hint == "open":
-            self._show_preset_card(chat_id, status="")
+            self._show_preset_card(chat_id, status="", to_bottom=True)
             self.feishu.reply_text(message_id, render(
                 intent, self.view, self.presence, updated_at=self._updated_at()))
             return
@@ -504,41 +507,63 @@ class Service:
     # ------------------------------------------------------------ card plumbing
 
     def _show_card(self, kind: str, chat_id: str, card: dict,
-                   *, prefer: str | None = None) -> str | None:
+                   *, prefer: str | None = None, to_bottom: bool = False) -> str | None:
         """Patch the card this kind already owns; post one if there is none.
 
         Each kind owns its own message (design 18.1), so patching the remote
         card can no longer clobber the preset list, and clicking a card makes
         that card the one we keep updating.
+
+        ``to_bottom`` is for the *menu taps*. The button paths are answered in
+        place because the user is looking right at that card, but a menu tap
+        comes from wherever they are standing in the chat: patching a card that
+        is screens above them looks like nothing happened (the receipt even
+        promises "👇"). So send a fresh card there, move the pointer, then
+        retire the old one -- send first, so a failed send never costs us the
+        card we already had (design D22).
         """
         owner = self.settings.owner_open_id
-        message_id = prefer or self.store.get_card(owner, kind)
         serialised = json.dumps(card, sort_keys=True)
-        if message_id and self.feishu.patch_card(message_id, card):
-            self.store.set_card(owner, kind, message_id)
-            self._rendered[kind] = serialised
-            return message_id
+        if not to_bottom:
+            message_id = prefer or self.store.get_card(owner, kind)
+            if message_id and self.feishu.patch_card(message_id, card):
+                self.store.set_card(owner, kind, message_id)
+                self._rendered[kind] = serialised
+                return message_id
         if not chat_id:
             return None
+        old = self.store.get_card(owner, kind)
         new_id = self.feishu.send_card(chat_id, card)
         if new_id:
             self.store.set_card(owner, kind, new_id)
             self._rendered[kind] = serialised
+            if to_bottom and old and old != new_id:
+                self._retire_card(old, kind, card)
         return new_id
 
+    def _retire_card(self, old: str, kind: str, card: dict) -> None:
+        """Recall the card the user has walked away from; notice it if too old."""
+        if self.feishu.recall_card(old):
+            return
+        title = (card.get("header", {}).get("title") or {}).get("content") \
+            or HEADER_TITLE
+        if not self.feishu.patch_card(
+                old, build_moved_notice_card(title, text=MENU_MOVED_NOTICE_TEXT)):
+            log.warning("could not recall or downgrade the old %s card %s", kind, old)
+
     def _show_preset_card(self, chat_id: str, *, status: str = "",
-                          prefer: str | None = None) -> None:
+                          prefer: str | None = None, to_bottom: bool = False) -> None:
         self._show_card(CARD_PRESET, chat_id,
                         build_preset_card(self.store.list_presets(), status=status),
-                        prefer=prefer)
+                        prefer=prefer, to_bottom=to_bottom)
 
     def _show_settings_card(self, chat_id: str, *, status: str = "",
-                            prefer: str | None = None) -> None:
+                            prefer: str | None = None, to_bottom: bool = False) -> None:
         self._show_card(CARD_SETTINGS, chat_id,
                         build_settings_card(self._setting_map(),
                                             night_enabled=self._night_enabled(),
                                             status=status),
-                        prefer=prefer)
+                        prefer=prefer, to_bottom=to_bottom)
 
     # --------------------------------------------------------------- presets
 

@@ -133,24 +133,31 @@ def _temperature_select(state: AcState, disabled: bool) -> dict:
     return select
 
 
-def build_moved_notice_card() -> dict:
+#: Notice wording: the remote card's (design D22) and the v1.2 cards' -- those
+#: move because a *menu tap* has to answer where the user is standing.
+MOVED_NOTICE_TEXT = "遥控器已更新，最新一张在下面 👇"
+MENU_MOVED_NOTICE_TEXT = "这张卡已更新到最新位置，请看下面 👇"
+
+
+def build_moved_notice_card(title: str = HEADER_TITLE,
+                           *, text: str = MOVED_NOTICE_TEXT) -> dict:
     """A one-line placeholder for an old card that could not be recalled.
 
-    Summoning a fresh card (design D22) tries to recall the previous one;
-    Feishu only allows that for ~24 h, so the old card is downgraded to this
-    notice instead -- pointing at the new card, which now sits below it in
-    the chat.
+    Summoning a fresh card (design D22, and every v1.2 menu tap) tries to recall
+    the previous one; Feishu only allows that for ~24 h, so the old card is
+    downgraded to this notice instead -- pointing at the new card, which now
+    sits below it in the chat.
     """
     return {
         "schema": "2.0",
         "config": {"update_multi": True},
         "header": {
-            "title": {"tag": "plain_text", "content": HEADER_TITLE},
+            "title": {"tag": "plain_text", "content": title},
             "template": THEME_OFFLINE,
         },
         "body": {
             "elements": [
-                {"tag": "markdown", "content": "遥控器已更新，最新一张在下面 👇"},
+                {"tag": "markdown", "content": text},
             ]
         },
     }
