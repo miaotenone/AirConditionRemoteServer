@@ -103,6 +103,19 @@ S_WEATHER_PUSHED_AT = "weather_pushed_at"
 #: How far the entry word / a timer may drift before we call it missed.
 _DAILY_WINDOW_S = 60.0
 
+#: A click's card work waits this long before it touches Feishu.
+#:
+#: Feishu keeps a card update only when it is sent *after* the callback
+#: response: sent from inside the handler, the client paints the new card and
+#: then snaps back to the old one, which is exactly the "点新建没反应" report
+#: (FAQ "Why does the card not update successfully or revert immediately after
+#: a successful update when clicking the card?" -- the update "must be executed
+#: after responding to the callback request"). lark-oapi writes that response
+#: only once the handler returns (``lark_oapi/ws/client.py`` ->
+#: ``_handle_data_frame``), so this settle time is the gap that lets the ack
+#: leave first.
+CALLBACK_SETTLE_S = 0.2
+
 
 def _is_card_command(text: str) -> bool:
     """True when `text` is the summon word, tolerating stray punctuation.
@@ -387,6 +400,24 @@ class Service:
         """
         threading.Thread(target=fn, args=args, name="ac-async", daemon=True).start()
 
+    def _run_after_callback(self, fn, *args) -> None:
+        """Run a click's card work only once the callback response is out.
+
+        Feishu discards a card update that is sent before it has answered the
+        callback: the client shows the new content for a moment and then puts
+        the old one back ("闪一下又没了"). So every branch of a click -- the
+        preset/settings/weather cards and the remote card's optimistic render --
+        runs here, after the SDK has had time to write its ack. Overridden in
+        tests so the dispatch stays deterministic.
+        """
+        def follow_up() -> None:
+            if self._stop.wait(CALLBACK_SETTLE_S):
+                return              # shutting down: don't start new work
+            fn(*args)
+
+        threading.Thread(target=follow_up, name="card-followup",
+                         daemon=True).start()
+
     def _weather_now(self, chat_id: str, message_id: str) -> None:
         # The fetch is the one slow thing a text command can trigger, so it
         # never runs inline here.
@@ -421,7 +452,15 @@ class Service:
 
     def _on_card_action(self, open_id: str, chat_id: str, message_id: str,
                         value, option, form_value=None, card_name=None) -> None:
-        """Fast path: authorise, normalise, go optimistic, queue. Never blocks."""
+        """Fast path: authorise, normalise, go optimistic, queue.
+
+        Every *Feishu write* a click causes is handed to a follow-up thread: the
+        SDK calls this on the thread that still owes Feishu a callback response,
+        and an update sent before that response lands is thrown away by the
+        client (it paints the new card, then snaps back to the old one -- the
+        "点了没反应" report). State changes stay here: the AC path's optimistic
+        view and the action queue feed the debounce, and must not gain latency.
+        """
         if not self._is_owner(open_id):
             return
         if chat_id:
@@ -429,7 +468,10 @@ class Service:
 
         ui_action = normalize_ui_action(value=value, form_value=form_value)
         if ui_action is not None:
-            self._handle_ui_action(ui_action, chat_id, message_id)
+            # The preset/settings/weather cards: the answer is a card patch, so
+            # the whole branch can wait for the ack.
+            self._run_after_callback(self._handle_ui_action, ui_action,
+                                     chat_id, message_id)
             return
 
         action = normalize_action(value=value, option=option)
@@ -450,7 +492,8 @@ class Service:
             self._actions.put(action)
 
         log.info("card action %s=%s from %s", name, number, open_id)
-        self._render()
+        # The hourglass is a card write like any other: after the ack.
+        self._run_after_callback(self._render)
 
     def _handle_ui_action(self, ui_action, chat_id: str, message_id: str) -> None:
         """Presets, settings and the weather card -- never an AC command.

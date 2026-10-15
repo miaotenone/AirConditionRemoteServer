@@ -62,9 +62,10 @@ def build_service(tmp_path, **overrides):
     service = Service(Settings(_env_file=None, **values))
     service.feishu = FakeFeishu()
     service.presence = Presence(online=True)
-    # Run the "slow work" seam inline so dispatch stays deterministic; the
-    # threading itself is pinned by its own test below.
+    # Run the "slow work" seams inline so dispatch stays deterministic; the
+    # threading itself is pinned by its own tests below.
     service._run_async = lambda fn, *args: fn(*args)
+    service._run_after_callback = lambda fn, *args: fn(*args)
     return service
 
 
@@ -238,6 +239,56 @@ def test_a_card_button_still_answers_in_place(tmp_path):
                             {"a": "preset_new", "v": 0}, None)
     assert card_id in service.feishu.patched
     assert len(service.feishu.sent) == sent_before, "没有多发消息"
+
+
+def test_a_clicks_card_work_waits_for_the_callback_response(tmp_path):
+    """点一下的卡片更新必须发生在「回调响应之后」。
+
+    飞书 FAQ 说得很直白：用接口更新卡片「必须在响应回调请求之后执行」，提前或
+    并行执行会导致更新失败——用户看到的就是「闪一下出来设置然后又没了」。
+    build_service() 把这条缝换成了同步以求确定性，这里把真的装回去，证明回调
+    返回时还没有任何飞书调用发生。
+    """
+    service = build_service(tmp_path)
+    service._run_after_callback = Service._run_after_callback.__get__(
+        service, Service)
+    service._on_text_message("ou_test", "oc_1", "om_1", "预设")
+    card_id = service.store.get_card("ou_test", "preset")
+    service.feishu.patched.clear()
+
+    started = time.monotonic()
+    service._on_card_action("ou_test", "oc_1", card_id,
+                            {"a": "preset_new", "v": 0}, None)
+    elapsed = time.monotonic() - started
+    assert elapsed < 0.1, f"回调被堵了 {elapsed:.2f}s"
+    assert service.feishu.patched == [], "回调还没返回就去动卡片了"
+
+    for _ in range(200):
+        if service.feishu.patched:
+            break
+        time.sleep(0.02)
+    assert service.feishu.patched == [card_id]
+    assert "保存" in visible_text(service.feishu.cards[card_id]), "是新建表单"
+
+
+def test_an_ac_buttons_card_update_waits_too(tmp_path):
+    """遥控卡按钮的乐观更新也走同一条路：先回执，再 patch。"""
+    service = build_service(tmp_path)
+    service._run_after_callback = Service._run_after_callback.__get__(
+        service, Service)
+    service.store.set_message_id("ou_test", "om_remote")
+    service.feishu.patched.clear()
+
+    service._on_card_action("ou_test", "oc_1", "om_remote",
+                            {"a": "power", "v": 1}, None)
+    assert service.view.power == 1, "状态还是立刻生效的"
+    assert service.feishu.patched == [], "回调还没返回就去动卡片了"
+
+    for _ in range(200):
+        if service.feishu.patched:
+            break
+        time.sleep(0.02)
+    assert "om_remote" in service.feishu.patched
 
 
 def test_the_weather_branch_replies_and_shows_a_card(tmp_path):
