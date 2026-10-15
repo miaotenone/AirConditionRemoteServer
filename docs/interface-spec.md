@@ -8,6 +8,9 @@
 状态：**定稿 v1**（决策记录见 §12）
 上游仓库：`AirConditionRemoteCTL`（ESP32 固件，已完成）
 本仓库：`AirConditionRemoteServer`（树莓派 + 飞书服务；**MQTT 链路已验证**，服务本体未开工）
+当前状态（2026-10-15）：v1 **已上线并在真机使用**；v1.2（预设 / 天气 / DHT11 夜间闭环 / 失联保护）也已上线，
+遗留与缺口见 [`../README.md`](../README.md) 与设计文档 §18.12。**本文以下仍是 v1 的规格原文**，
+v1.1/v1.2 的增补就地标在对应位置。
 
 ---
 
@@ -91,6 +94,12 @@
 | `{prefix}/event` | 订阅 | 1 | **是** | 设备事件 `{type,ts,prev}` |
 
 `prefix` 默认 `ac`，由固件配网页设定，两边必须一致。
+
+> ⚠️ **上表的 QoS 是设计意图，线上实际是 QoS0**（2026-10-15 核对）：ESP32 侧用的是 **PubSubClient**，
+> 它的 `publish()` 第三个参数是 `retained`、**没有 QoS 参数**（只能 QoS0），`subscribe()` 同理。
+> **`Retained` 那一列是真的**（固件都传了 `true`）——retained + 固件每 30s 重发 `state`，才是实际兜底的东西。
+> 所以：**不要依赖 QoS1 的投递保证**（掉一条 `ac/state`，服务端到 `CONFIRM_TIMEOUT_S` 就会显示「⚠️ 未确认」）。
+> 要真 QoS1 得换客户端库、或把契约改成写实情——都还没做。设计文档 §18.12.4。
 
 > **为什么还要 `hb`**：Mosquitto 跑在树莓派上但**是独立的 systemd 单元**，
 > 所以「MQTT 连上了」并不等于「发命令的那个服务活着」。`hb` 是设备唯一能
@@ -438,7 +447,7 @@ class Presence:
 | `LOG_LEVEL` | 日志级别 | `INFO` |
 | `FEISHU_LOG_LEVEL` | 仅长连接 socket 的日志级别；`DEBUG` 可看到原始 WS 收发包 | `INFO` |
 | `DEBOUNCE_MS` | 去抖窗口：此窗口内的连续操作合并成一条 `ac/cmd` | `400` |
-| `CONFIRM_TIMEOUT_S` | 超过这么久没收到 `ac/state` → 卡片显示「⚠️ 未确认」 | `5` |
+| `CONFIRM_TIMEOUT_S` | 超过这么久没收到 `ac/state` → 卡片显示「⚠️ 未确认」（**命令无需改变时会误报**，见 §10 注） | `5` |
 | `STALE_AFTER_S` | 在线但静默超过这么久 → 卡片加「状态可能过期」软提示 | `90` |
 | `TEXT_CONTROL_ENABLED` | 是否把普通中文短句当命令解析（§5.6）；`false` 则只认 `设置卡片` | `true` |
 | `DB_PATH` | SQLite 路径（owner ↔ 卡片 message_id、已处理消息去重） | `ac-bot.sqlite3` |
@@ -531,6 +540,11 @@ AirConditionRemoteServer/
 | 非 owner 的消息/点击 | 忽略 + 记日志（不回复，避免探测） |
 
 日志至少包含：每次 `ac/cmd`（payload）、每次 `ac/state` 变化、每次卡片更新、每次重连。
+
+> ⚠️ **「5s 无变化 ⇒ ⚠️ 未确认」会误报（2026-10-15 实测）**：当这条命令**不需要改变任何状态**时
+> （空调已经在那个状态），`merge_actions()` 合并成空 ⇒ 服务端**根本不发 `ac/cmd`**，也就不会有 `ac/state` 回来；
+> 而 `pending` 是在**排队时**就置位的，于是下一个 tick 立刻报「未确认」。所以这条提示只能当**弱提示**，
+> **不能当"设备没执行"的判据**。修法：固件对每条命令都回一次状态，或服务端区分「无需改变」。设计文档 §18.12.1。
 
 ---
 
