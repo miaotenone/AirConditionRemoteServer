@@ -68,11 +68,28 @@ class Summary:
         return self.count == 0
 
 
+#: What a DHT11 can actually report. Its datasheet says 0..50 degC / 20..90% RH;
+#: the band here is a little wider so a genuinely cold or dry room still counts,
+#: but it excludes the all-zero frame a module with nothing to say answers with
+#: -- and that frame passes the checksum, so it arrives as ``ok: true``.
+TEMP_RANGE = (-20, 60)
+HUMIDITY_RANGE = (5, 100)
+
+
+def _plausible(temp: int, humidity: Optional[int]) -> bool:
+    if not TEMP_RANGE[0] <= temp <= TEMP_RANGE[1]:
+        return False
+    if humidity is not None and not HUMIDITY_RANGE[0] <= humidity <= HUMIDITY_RANGE[1]:
+        return False
+    return True
+
+
 def parse_env(payload: dict) -> EnvReading:
     """Read one ``ac/env`` object; anything incomplete counts as a failed read.
 
     The firmware is expected to publish ``{"ok": false}`` on a bad read, but a
-    missing temperature is treated the same way rather than trusted.
+    missing temperature is treated the same way rather than trusted -- and so is
+    an impossible one: the history is only allowed to contain weather.
     """
     if not isinstance(payload, dict):
         return EnvReading(ok=False)
@@ -82,11 +99,14 @@ def parse_env(payload: dict) -> EnvReading:
     if not ok:
         return EnvReading(ok=False)
     try:
-        return EnvReading(temp=int(temp),
-                          humidity=int(humidity) if humidity is not None else None,
-                          ok=True)
+        reading = EnvReading(temp=int(temp),
+                             humidity=int(humidity) if humidity is not None else None,
+                             ok=True)
     except (TypeError, ValueError):
         return EnvReading(ok=False)
+    if not _plausible(reading.temp, reading.humidity):
+        return EnvReading(ok=False)
+    return reading
 
 
 # ------------------------------------------------------------------- windows

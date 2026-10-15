@@ -31,6 +31,33 @@ def test_parse_env_rejects_a_payload_without_temperature():
     assert parse_env({"humidity": 55, "ok": True}).ok is False
 
 
+def test_parse_env_rejects_the_all_zero_frame():
+    """2026-10-15: 第一次真接上 DHT11，第一条记录就是 0℃/0% 且 ok=true.
+
+    A DHT11 with nothing to say answers an all-zero frame, and the zero frame
+    passes the checksum -- so it arrives as ``ok: true``. It is not a reading:
+    the sensor's own spec starts at 20% RH, so 0% is the absence of data. One
+    of these in the history would drag the chart down to freezing.
+    """
+    assert parse_env({"temp": 0, "humidity": 0, "ok": True}).ok is False
+
+
+def test_parse_env_rejects_an_impossible_humidity():
+    # 0% and 150% RH are both outside anything a DHT11 can report.
+    assert parse_env({"temp": 26, "humidity": 0, "ok": True}).ok is False
+    assert parse_env({"temp": 26, "humidity": 150, "ok": True}).ok is False
+
+
+def test_parse_env_rejects_an_impossible_temperature():
+    assert parse_env({"temp": 120, "humidity": 50, "ok": True}).ok is False
+
+
+def test_parse_env_still_accepts_a_cold_but_real_room():
+    """Guard against over-tightening: a cold room is weather, not a glitch."""
+    assert parse_env({"temp": 3, "humidity": 45, "ok": True}) == \
+        EnvReading(temp=3, humidity=45, ok=True)
+
+
 def test_parse_env_survives_junk():
     assert parse_env({}).ok is False
 
