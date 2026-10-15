@@ -16,7 +16,7 @@
 飞书客户端（手机）
    │  长连接（出站 wss，无需公网 IP）
    ▼
-ac-bot.service        树莓派 /opt/ac-bot
+ac-bot.service        树莓派 ~/project/AirConditionRemoteServer
    │  MQTT over LAN
    ▼
 Mosquitto 2.0.11      127.0.0.1:1883
@@ -31,19 +31,30 @@ ESP32 网关            192.168.8.105
 
 | 项 | 值 |
 |---|---|
-| 代码 | `/opt/ac-bot`（`pip install -e .`，可编辑安装）|
-| 解释器 | `/opt/ac-bot/.venv`，Python 3.10.12 |
+| 代码 | `~/project/AirConditionRemoteServer`（**git 检出**；`uv pip install -e .` 可编辑安装）|
+| 解释器 | `~/project/AirConditionRemoteServer/.venv`（`uv` 0.13.1 建），Python 3.10.12 |
 | 关键依赖 | `lark-oapi 1.7.4`（本机 Windows 侧 1.7.2，行为一致）、`paho-mqtt 2.1.0`、`pydantic 2.14.1`、`pydantic-settings 2.15.0` |
 | 服务 | `ac-bot.service`，`User=dirj`，`enabled` + `active`，`Restart=always` |
 | 依赖关系 | `Requires=mosquitto.service`（broker 停了它就一起停）|
-| 密钥 | `/opt/ac-bot/.env`，`0600 dirj:dirj`（**不入仓库**）|
+| 密钥 | `~/project/AirConditionRemoteServer/.env`，`0600 dirj:dirj`（**不入仓库**，`git clone` 带不来，必须手工拷）|
 | 状态库 | `/var/lib/ac-bot/ac-bot.sqlite3`（systemd `StateDirectory=ac-bot`）|
+
+> **2026-10-15 迁移**：原先手工拷在 `/opt/ac-bot`（非 git 检出，代码靠 `cp -a` 覆盖），现改为
+> **git 检出**到 `~/project/AirConditionRemoteServer`，venv 改用 `uv` 建、依赖版本与旧 venv
+> 逐个对齐过（`lark-oapi 1.7.4` / `pycryptodome 3.24.1`，`uv pip freeze` 两边完全一致）。
+> 固件仓库同样克隆在 `~/project/AirConditionRemoteCTL`，只作参考、**不参与运行**。
+> 状态库仍在 `/var/lib/ac-bot/`，预设 / 历史 / 设置都不受这次迁移影响。
+> 旧目录 `/opt/ac-bot` 已弃用（暂留作回滚兜底）。
 
 重装/复验：
 
 ```bash
 systemctl status ac-bot            # 应为 active (running)
 journalctl -u ac-bot -f            # 实时日志
+
+# 更新代码 —— 现在就是普通的 git pull（不再是手工拷贝 + 逐文件校验）
+cd ~/project/AirConditionRemoteServer && git pull
+sudo systemctl restart ac-bot
 ```
 
 ## 3. 飞书侧事实（应用与标识）
@@ -144,7 +155,7 @@ for (n,) in c.execute(\"select name from sqlite_master where type='table'\"):
 
 排障提示：**事件原始 payload（`receive message … payload: {…}`）只在 `FEISHU_LOG_LEVEL=DEBUG`
 时进 journal**，INFO 级别看不到。2026-10-14 丢的那 4 次点击正好发生在 INFO 时段（00:01–00:04），
-journal 里**一行 payload 都没有**，事后无从回溯 —— 所以排障前先在 `/opt/ac-bot/.env` 里把
+journal 里**一行 payload 都没有**，事后无从回溯 —— 所以排障前先在 `~/project/AirConditionRemoteServer/.env` 里把
 `FEISHU_LOG_LEVEL` 改成 `DEBUG` 并 `systemctl restart ac-bot`（改回 `INFO` 记得再重启）。
 `chat_id` 与回调结构是当时开着 DEBUG 才拿到的。
 补了一层兜底：**字段一个都解不出来的点击，现在会在 WARNING 打出原始报文**
