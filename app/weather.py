@@ -11,10 +11,13 @@ decision is unit tested from a fixed payload.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 from .state import AC_MODE, TEMP_DEFAULT, clamp_temp
+
+log = logging.getLogger(__name__)
 
 COOL = AC_MODE["cool"]
 FAN = AC_MODE["fan"]
@@ -107,9 +110,14 @@ def parse_open_meteo(payload: dict) -> Optional[WeatherNow]:
     return WeatherNow(outdoor_c=outdoor, humidity=humidity, next2h_delta_c=delta)
 
 
-#: IP geolocation + forecast, both HTTPS. Kept behind functions so the decision
-#: above stays testable from a fixed payload.
-GEO_URL = "https://ipapi.co/json/"
+#: IP geolocation, tried in order (design §7: `ipwho.is` / `ipinfo`). A single
+#: provider is not enough: `ipapi.co` started answering a Cloudflare challenge
+#: page instead of JSON, which silently turned every weather reply into
+#: "没拿到天气" (2026-10-15).
+GEO_URLS = (
+    "https://ipwho.is/",
+    "https://ipinfo.io/json",
+)
 FORECAST_URL = (
     "https://api.open-meteo.com/v1/forecast"
     "?latitude={lat}&longitude={lon}"
@@ -126,13 +134,44 @@ def _get_json(url: str, timeout: float) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
-def geolocate(*, timeout: float = 6.0) -> Optional[tuple[float, float]]:
-    """Where we are, by public IP. ``None`` when the lookup fails."""
-    try:
-        payload = _get_json(GEO_URL, timeout)
-        return float(payload["latitude"]), float(payload["longitude"])
-    except Exception:  # noqa: BLE001 - a failed lookup is not fatal
+def _coords(payload: Any) -> Optional[tuple[float, float]]:
+    """Read latitude/longitude out of either provider's shape.
+
+    ``ipwho.is`` reports ``latitude``/``longitude``; ``ipinfo.io`` reports a
+    ``"lat,lon"`` string under ``loc``. Anything else (a challenge page, an
+    error object) yields ``None`` so the next provider gets a turn.
+    """
+    if not isinstance(payload, dict):
         return None
+
+    try:
+        return float(payload["latitude"]), float(payload["longitude"])
+    except (KeyError, TypeError, ValueError):
+        pass
+
+    loc = payload.get("loc")
+    if isinstance(loc, str) and "," in loc:
+        latitude, _, longitude = loc.partition(",")
+        try:
+            return float(latitude), float(longitude)
+        except ValueError:
+            return None
+    return None
+
+
+def geolocate(*, timeout: float = 6.0) -> Optional[tuple[float, float]]:
+    """Where we are, by public IP. ``None`` when every provider fails."""
+    for url in GEO_URLS:
+        try:
+            coords = _coords(_get_json(url, timeout))
+        except Exception as exc:  # noqa: BLE001 - one provider down is not fatal
+            log.warning("geolocate: %s failed (%s), trying the next", url, exc)
+            continue
+        if coords is not None:
+            return coords
+        log.warning("geolocate: %s returned no coordinates", url)
+    log.warning("geolocate: every provider failed")
+    return None
 
 
 def fetch_current(lat: float, lon: float, *, timeout: float = 8.0

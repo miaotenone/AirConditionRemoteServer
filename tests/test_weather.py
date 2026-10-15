@@ -9,6 +9,7 @@ The network calls live here too, but behind their own functions, so the whole
 decision is unit tested from a fixed payload.
 """
 
+from app import weather
 from app.state import AC_FAN, AC_MODE
 from app.weather import WeatherNow, parse_open_meteo, recommend
 
@@ -82,3 +83,43 @@ def test_parse_open_meteo_survives_a_short_hourly_series():
 
 def test_parse_open_meteo_returns_none_without_a_current_temperature():
     assert parse_open_meteo({}) is None
+
+
+# ------------------------------------------------------------- IP geolocation
+# The first provider answers a Cloudflare challenge page in production (see the
+# 2026-10-15 outage: `天气` said "没拿到" because `ipapi.co` stopped returning
+# JSON). So the lookup is a chain: any provider may fail, the next one is tried.
+
+
+def test_geolocate_reads_the_first_providers_latitude_longitude(monkeypatch):
+    monkeypatch.setattr(weather, "_get_json",
+                        lambda url, timeout: {"latitude": 22.5, "longitude": 114.0})
+    assert weather.geolocate() == (22.5, 114.0)
+
+
+def test_geolocate_falls_back_when_a_provider_breaks(monkeypatch):
+    calls = []
+
+    def fake_get_json(url, timeout):
+        calls.append(url)
+        if url == weather.GEO_URLS[0]:
+            raise ValueError("Just a moment...")  # an HTML challenge, not JSON
+        return {"loc": "22.3193,114.1694"}
+
+    monkeypatch.setattr(weather, "_get_json", fake_get_json)
+    assert weather.geolocate() == (22.3193, 114.1694)
+    assert calls == list(weather.GEO_URLS[:2]), "第一个挂了就该试下一个"
+
+
+def test_geolocate_reads_a_comma_separated_loc_too(monkeypatch):
+    monkeypatch.setattr(weather, "_get_json",
+                        lambda url, timeout: {"loc": "1.5,2.5"})
+    assert weather.geolocate() == (1.5, 2.5)
+
+
+def test_geolocate_gives_up_when_every_provider_fails(monkeypatch):
+    def always_fails(url, timeout):
+        raise OSError("offline")
+
+    monkeypatch.setattr(weather, "_get_json", always_fails)
+    assert weather.geolocate() is None

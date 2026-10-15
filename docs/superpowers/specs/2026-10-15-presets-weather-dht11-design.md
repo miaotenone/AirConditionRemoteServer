@@ -470,6 +470,7 @@ lib_deps =
   - **表单内的 select 走 `form_value`**（不再走 `action.option`）。
 - **结构与现有 2.0 一致**：`form` 放在 `body.elements` **根层**；提交按钮
   `"tag":"button","action_type":"form_submit","name":"submit"`；`name` 输入框 `required:true`。
+  （**实测修正见 §18.10**：2.0 起必须再带 `form_action_type:"submit"`。）
 - 删除用按钮的 `confirm` 二次确认弹窗（2.0 支持）。
 
 ### 18.4 文本指令（原 blocker B6/S13）
@@ -503,6 +504,7 @@ lib_deps =
 - **读失败不落库**：`ok=false` 不进 `env_history`；聚合（极值/均值）**只算成功样本**。
 - **闭环读到陈旧/失败数据 → 不动作**（`env` 超过 10 分钟或 `ok=false` 时停手）。
 - 定位/天气端点：用 **HTTPS** 服务（`ipwho.is` 或 `ipapi.co` + Open-Meteo），支持 `WEATHER_LAT/LON` 覆盖。
+  （**实测修正见 §18.10**：`ipapi.co` 已返回 Cloudflare 挑战页，现按 `ipwho.is` → `ipinfo.io` 依次重试。）
 
 ### 18.7 夜间闭环细节（原 S6/S8/S9/S10/S11）
 
@@ -543,6 +545,31 @@ lib_deps =
 - **帮助文案**：新指令要进 `HELP_TEXT`（沿 D24）；据此 `tests/test_help_text.py` 需**同步更新**——
   这是有意的例外，「既有测试一行不改」对 `test_help_text.py` 不适用。
 - §14 增补验收项：推荐规则表（P7）要有**独立测试**（照 `test_help_text.py` 的双向钉法）。
+
+---
+
+### 18.10 首次真机上线实测修正（2026-10-15 下午）
+
+上线后用户点菜单，`预设 ▸ 新建` / `夜间` / `天气` 三处都失败。两条独立根因，均已修复并回归：
+
+1. **表单卡被整卡拒收**（`预设` 的「＋新建」和 `夜间` 卡都是表单卡）：飞书返回
+   `code=230099 / ErrCode 300123 / ErrMsg: there is no submit button in the form container`。
+   卡片 JSON **2.0 把提交属性从 `action_type: "form_submit"` 改名为 `form_action_type: "submit"`**
+   （`action_type` 降级为「历史属性」）。只写旧字段时，2.0 校验器找不到提交按钮 → 整张卡发不出去。
+   → `_submit_button` **两个都写**：`action_type:"form_submit"` + `form_action_type:"submit"`
+   （旧字段留着喂老客户端，也让既有断言不改）。
+   - 复现与验证：8 张 v1.2 卡片用真 key 发到本人会话再删（`im/v1/messages` + DELETE），
+     修复前 `preset form` 必失败、修复后 **8/8 全部 code=0**。
+2. **IP 定位源挂了**（`天气` 卡片发得出去，但内容是「🌤 天气没拿到」）：
+   `ipapi.co` 现在返回 **Cloudflare「Just a moment...」HTML 挑战页**，`json.loads` 抛错 →
+   `geolocate()` 返回 `None` → `fetch_now()` 返回 `None`。Open-Meteo 本身一直是好的。
+   → 定位改成**候选链** `ipwho.is` → `ipinfo.io`（`GEO_URLS`），逐个试、逐个容忍失败，
+   兼容两种返回形状（`latitude/longitude` 与 `loc:"lat,lon"`），并在全挂时记 `warning`。
+   `WEATHER_LAT/LON` 覆盖路径不变（服务器本机实测：`(39.907,116.397)` → `25℃ / 19% / -2h -1℃`）。
+
+教训：**这两类故障都是「静默」的**——前者只有 Pi 日志里一条 `send_card failed`，后者连日志都没有
+（`fetch_now` 设计上就是失败返 `None`）。因此定位链现在会 `log.warning`；卡片 payload 以后改动
+都要过一遍「真发一张再删」的实测（脚本见会话临时目录，非仓库文件）。
 
 ---
 

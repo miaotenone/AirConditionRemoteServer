@@ -229,13 +229,20 @@ def _confirm(title: str, text: str) -> dict:
 
 
 def _submit_button(label: str, action: str) -> dict:
-    """A form's submit button: the click carries `action.form_value`."""
+    """A form's submit button: the click carries `action.form_value`.
+
+    Card JSON 2.0 replaced ``action_type: form_submit`` with
+    ``form_action_type: submit``; without the new field Feishu rejects the whole
+    card ("there is no submit button in the form container", ErrCode 300123).
+    Both are sent: the old one is deprecated but still read by older clients.
+    """
     return {
         "tag": "button",
         "size": "medium",
         "type": "primary",
         "name": "submit",
         "action_type": "form_submit",
+        "form_action_type": "submit",
         "text": {"tag": "plain_text", "content": label},
         "behaviors": [{"type": "callback", "value": {"a": action}}],
     }

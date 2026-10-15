@@ -261,6 +261,17 @@ def test_the_preset_form_submits_as_a_form_submit_button():
     assert submit["action_type"] == "form_submit"
 
 
+def test_every_form_submit_button_carries_the_card_2_0_submit_attribute():
+    # 卡片 JSON 2.0 把提交属性改名成 `form_action_type`；少了它飞书会整张卡拒收：
+    # "there is no submit button in the form container"（ErrCode 300123）。
+    for card, action in (
+        (build_preset_form(), "preset_save"),
+        (build_settings_card({}, night_enabled=False), "settings_save"),
+    ):
+        (submit,) = buttons(card, action)
+        assert submit["form_action_type"] == "submit"
+
+
 def test_the_preset_form_prefills_an_existing_preset():
     from app.preset import Preset
 
