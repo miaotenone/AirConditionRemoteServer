@@ -13,7 +13,7 @@ import pytest
 from app.cards import SETTINGS_TITLE
 from app.config import Settings
 from app.env import EnvReading
-from app.main import Service
+from app.main import Service, _WEATHER_CATCHUP_S, _WEATHER_RETRY_S
 from app.preset import Preset
 from app.state import AC_FAN, AC_MODE, AcState, Presence
 from app.weather import WeatherNow, recommend
@@ -694,3 +694,127 @@ def _past():
     if datetime.now().hour == 0:
         pytest.skip("no time earlier today")
     return "00:01"
+
+
+# ------------------------------------------- design 18.12: the three gaps
+
+def test_a_failed_daily_weather_push_is_retried_and_marked_only_on_success(tmp_path):
+    # 设计 18.12 #3：到点那次取数失败，不该等于「今天没有建议卡」。
+    service = build_service(tmp_path)
+    service.store.set_setting("chat_id", "oc_1")
+    attempts = []
+
+    def flaky(chat_id):
+        attempts.append(chat_id)
+        return len(attempts) >= 2        # 第一次取数失败，第二次成功
+
+    service._push_weather = flaky
+    now = datetime.now().replace(second=0, microsecond=0)
+    service.store.set_setting("push_time", now.strftime("%H:%M"))
+    at = now.timestamp()
+
+    service._maybe_push_weather(at + 5)                 # 到点：试一次，失败
+    assert attempts == ["oc_1"]
+    assert service.store.get_setting("weather_pushed_at", "0") == "0"
+
+    service._maybe_push_weather(at + 5 + 10)            # 退避窗口内：不重打
+    assert attempts == ["oc_1"]
+
+    service._maybe_push_weather(at + 5 + _WEATHER_RETRY_S)     # 退避到点：成功
+    assert attempts == ["oc_1", "oc_1"]
+    assert float(service.store.get_setting("weather_pushed_at")) == at + 5 + _WEATHER_RETRY_S
+
+    service._maybe_push_weather(at + 5 + 2 * _WEATHER_RETRY_S)  # 这一次已经推过
+    assert attempts == ["oc_1", "oc_1"]
+
+
+def test_a_daily_weather_push_waits_for_a_chat_instead_of_burning_the_day(tmp_path):
+    # 设计 18.12 #3：还没有会话可发时不能把「今天推过了」写死。
+    service = build_service(tmp_path)
+    attempts = []
+    service._push_weather = lambda chat_id: attempts.append(chat_id) or True
+    now = datetime.now().replace(second=0, microsecond=0)
+    service.store.set_setting("push_time", now.strftime("%H:%M"))
+    at = now.timestamp()
+
+    service._maybe_push_weather(at + 5)
+    assert attempts == []               # 没有会话，什么都没发
+    assert service.store.get_setting("weather_pushed_at", "0") == "0"
+
+    service.store.set_setting("chat_id", "oc_1")
+    service._maybe_push_weather(at + 5 + _WEATHER_RETRY_S)
+    assert attempts == ["oc_1"]
+
+
+def test_a_daily_weather_push_gives_up_after_the_catch_up_window(tmp_path):
+    # 到点后 _WEATHER_CATCHUP_S 之外不再补：半夜推「今天的建议」没有意义。
+    service = build_service(tmp_path)
+    service.store.set_setting("chat_id", "oc_1")
+    attempts = []
+    service._push_weather = lambda chat_id: attempts.append(chat_id) or False
+    now = datetime.now().replace(second=0, microsecond=0)
+    service.store.set_setting("push_time", now.strftime("%H:%M"))
+    at = now.timestamp()
+
+    service._maybe_push_weather(at + 5)
+    assert attempts == ["oc_1"]
+    service._maybe_push_weather(at + 5 + _WEATHER_CATCHUP_S + 1)
+    assert attempts == ["oc_1"]
+
+
+def test_a_batch_with_nothing_to_send_does_not_leave_a_command_pending(tmp_path):
+    # 设计 18.12 #1：合并成空 = 没有命令要执行，不是「设备没执行」。
+    service = build_service(tmp_path)
+    service.pending = True
+    service._send_burst([("refresh", 0)])
+    assert service.pending is False
+    service._expire_pending()
+    assert service.unconfirmed is False
+
+
+def test_a_click_is_not_expired_before_the_publisher_sent_it(tmp_path):
+    # 设计 18.12 #1：排队就置位 pending，但计时器要等真发出去才起跳，
+    # 否则落在这 1 秒里的 tick 会立刻报「未确认」。
+    service = build_service(tmp_path)
+    service._on_card_action("ou_test", "oc_1", "om_1", {"a": "temp", "v": 26}, None)
+    assert service.pending is True
+    service._expire_pending()
+    assert service.unconfirmed is False
+    assert service.pending is True
+
+
+def test_a_new_click_does_not_expire_on_the_previous_commands_deadline(tmp_path):
+    # 上一条命令留下的 deadline 是过去的，不能拿它判这一条。
+    service = build_service(tmp_path)
+    service.pending = True
+    service._confirm_deadline = time.monotonic() - 1
+    service._on_card_action("ou_test", "oc_1", "om_1", {"a": "temp", "v": 26}, None)
+    service._expire_pending()
+    assert service.unconfirmed is False
+
+
+def test_a_published_command_that_gets_no_answer_still_warns(tmp_path):
+    # 别把「无变化」修过头：真发出去、设备不回话，还是要报未确认。
+    service = build_service(tmp_path)
+    published = []
+    service.mqtt.publish_command = lambda commands: published.append(commands) or True
+    service.pending = True
+    service._send_burst([("temp", 26)])
+    assert published == [{"temp": 26}]
+    service._confirm_deadline = time.monotonic() - 1
+    service._expire_pending()
+    assert service.unconfirmed is True
+
+
+def test_a_command_that_could_not_be_published_still_times_out(tmp_path):
+    # 发不出去也不能让沙漏一直转：计时器同样要起跳。
+    service = build_service(tmp_path)
+    service.mqtt.publish_command = lambda commands: False
+    service.pending = True
+    service._send_burst([("temp", 26)])
+    assert service._confirm_deadline > 0
+    service._expire_pending()
+    assert service.pending is True            # 还没到点
+    service._confirm_deadline = time.monotonic() - 1
+    service._expire_pending()
+    assert service.unconfirmed is True

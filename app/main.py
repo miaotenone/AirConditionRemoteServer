@@ -102,8 +102,18 @@ S_NIGHT_TARGET = "night_target"
 S_CHAT_ID = "chat_id"
 S_WEATHER_PUSHED_AT = "weather_pushed_at"
 
-#: How far the entry word / a timer may drift before we call it missed.
-_DAILY_WINDOW_S = 60.0
+#: The daily weather push, once it is due.
+#:
+#: The fetch is the one thing here that leaves the house, so it fails for
+#: reasons that have nothing to do with us (a DNS hiccup, a blocked IP lookup).
+#: Marking the day as "pushed" *before* sending turned one such failure into
+#: "no suggestion card today" (design 18.12 #3). So: mark only what was really
+#: sent, back off between tries, and give up rather than push a "daily" card at
+#: midnight. This replaces the old "60 s window or nothing" rule, which is why
+#: there is no longer a `_DAILY_WINDOW_S`: a late card about today's weather
+#: beats no card at all.
+_WEATHER_RETRY_S = 300.0        # 5 min between tries after a failure
+_WEATHER_CATCHUP_S = 2 * 3600.0  # ... and no attempt later than this
 
 #: A click's card work waits this long before it touches Feishu.
 #:
@@ -155,6 +165,7 @@ class Service:
         self._loop = LoopState()    # the night loop's memory
         self._last_env_record = 0.0
         self._last_hb = 0.0
+        self._weather_retry_at = 0.0    # when a failed daily push may try again
         self._lock = threading.RLock()
         self._actions: queue.Queue = queue.Queue()
         self._stop = threading.Event()
@@ -339,7 +350,7 @@ class Service:
                 for action, value in intent.actions:
                     self.view = apply_action(self.view, action, value)
                     self._actions.put((action, value))
-                self.pending = True
+                self._begin_pending()
                 if intent.actions:
                     self._loop = replace(self._loop, manual_until=time.time() + MANUAL_YIELD_S)
 
@@ -526,7 +537,7 @@ class Service:
                 self.store.set_message_id(self.settings.owner_open_id, message_id)
             if name != "refresh":
                 self.view = apply_action(self.view, name, number)
-                self.pending = True
+                self._begin_pending()
                 self._loop = replace(self._loop, manual_until=time.time() + MANUAL_YIELD_S)
             # The debounced publisher does the actual work.
             self._actions.put(action)
@@ -756,14 +767,16 @@ class Service:
                                            status="✅ 已按建议执行"),
                         prefer=message_id)
 
-    def _push_weather(self, chat_id: str) -> None:
+    def _push_weather(self, chat_id: str) -> bool:
+        """Send the daily suggestion card; False when the fetch came up empty."""
         now, recommendation = self._weather_snapshot()
         self._last_weather = (now, recommendation)
         if now is None or recommendation is None:
             log.info("weather push skipped: no data")
-            return
+            return False
         self._show_card(CARD_WEATHER, chat_id,
                         build_weather_card(now, recommendation))
+        return True
 
     # -------------------------------------------------------------------- tick
 
@@ -787,13 +800,45 @@ class Service:
                 except queue.Empty:
                     break
 
-            with self._lock:
-                commands = merge_actions(self.state, burst)
+            self._send_burst(burst)
+
+    def _send_burst(self, burst) -> None:
+        """Publish one debounced batch, or decide it has nothing to say.
+
+        Merging is the point of a batch (three fast "+" taps become one
+        ``{"temp": 27}``), and it is also where "nothing to do" is decided --
+        which is *not* the same thing as "the device never answered".
+        """
+        with self._lock:
+            commands = merge_actions(self.state, burst)
             if not commands:
-                continue            # e.g. a bare "refresh"
-            if self.mqtt.publish_command(commands):
-                with self._lock:
-                    self._confirm_deadline = time.monotonic() + self.settings.confirm_timeout_s
+                # e.g. a bare "refresh": the card was already repainted
+                # optimistically, but there is no command to send and therefore
+                # nothing to wait for. Leaving `pending` set here is what made
+                # the next tick report it as "unconfirmed" (design 18.12 #1).
+                self.pending = False
+                self._confirm_deadline = 0.0
+                return
+        sent = self.mqtt.publish_command(commands)
+        with self._lock:
+            # Armed even when the publish failed: "we asked and heard nothing
+            # back" is what the warning says, and leaving the timer unarmed
+            # would leave the hourglass on the card for good.
+            self._confirm_deadline = time.monotonic() + self.settings.confirm_timeout_s
+        if not sent:
+            log.warning("could not publish %s; the card will report it unconfirmed",
+                        commands)
+
+    def _begin_pending(self) -> None:
+        """Note that a command is on its way, without arming the confirm timer.
+
+        The timer belongs to the publisher: it starts when the batch actually
+        goes out. Resetting it here is what stops a *previous* command's
+        deadline from expiring this one before it has even been sent (design
+        18.12 #1). Call under ``self._lock``.
+        """
+        self.pending = True
+        self._confirm_deadline = 0.0
 
     def _tick(self) -> None:
         """One second of housekeeping: timers, history, heartbeat, night loop."""
@@ -810,7 +855,13 @@ class Service:
     def _expire_pending(self) -> None:
         changed = False
         with self._lock:
-            if self.pending and time.monotonic() > self._confirm_deadline:
+            # `_confirm_deadline == 0.0` means the publisher has not sent this
+            # batch yet -- it drains the queue within a second, but a tick can
+            # land in between. Only an armed deadline is allowed to expire, or
+            # a click would be reported as "unconfirmed" before it was sent
+            # (design 18.12 #1).
+            if (self.pending and self._confirm_deadline
+                    and time.monotonic() > self._confirm_deadline):
                 self.pending = False
                 self.unconfirmed = True
                 changed = True
@@ -864,21 +915,32 @@ class Service:
             self.feishu.send_text(chat_id, f"⏰ 已按预约执行「{preset.name}」")
 
     def _maybe_push_weather(self, now: float) -> None:
-        """Push the daily suggestion once, at the configured time (design §9.3)."""
-        push = self._push_time()
-        at = at_today(push, datetime.now())
-        if at is None or not (0 <= now - at < _DAILY_WINDOW_S):
-            return
-        last = self._setting_float(S_WEATHER_PUSHED_AT)
-        if now - last < 6 * 3600:          # already pushed for this occurrence
-            return
-        self.store.set_setting(S_WEATHER_PUSHED_AT, str(now))
+        """Push the daily suggestion, retrying a failed fetch (design §9.3).
+
+        The day counts as pushed only once a card really went out, so one empty
+        fetch no longer costs the whole evening's card (design 18.12 #3). Tries
+        are spaced out, and none happen more than `_WEATHER_CATCHUP_S` after the
+        configured time -- "today's suggestion" at midnight helps nobody.
+        """
+        at = at_today(self._push_time(), datetime.now())
+        if at is None or now < at:
+            return                          # no such time today, or not yet
+        if now - self._setting_float(S_WEATHER_PUSHED_AT) < 6 * 3600:
+            return                          # this occurrence is already done
+        if now - at >= _WEATHER_CATCHUP_S:
+            return                          # too late to be worth sending
+        if now < self._weather_retry_at:
+            return                          # backing off after a failed try
+
         chat_id = self._chat_id()
+        if chat_id and self._push_weather(chat_id):
+            log.info("pushed the daily weather suggestion")
+            self.store.set_setting(S_WEATHER_PUSHED_AT, str(now))
+            self._weather_retry_at = 0.0
+            return
         if not chat_id:
             log.info("weather push skipped: no chat to send to yet")
-            return
-        log.info("pushing the daily weather suggestion")
-        self._push_weather(chat_id)
+        self._weather_retry_at = now + _WEATHER_RETRY_S
 
     def _night_step(self, now: float) -> None:
         """One pass of the night closed loop (design §7.3)."""
@@ -920,7 +982,7 @@ class Service:
             for action, value in actions:
                 self.view = apply_action(self.view, action, value)
                 self._actions.put((action, value))
-            self.pending = True
+            self._begin_pending()
 
     def _chat_id(self) -> str:
         return self.store.get_setting(S_CHAT_ID, "")
