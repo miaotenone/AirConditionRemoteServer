@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from typing import Callable, Optional
 
@@ -39,6 +40,9 @@ class MqttBridge:
                  on_event: Optional[RetainedHandler] = None) -> None:
         self._host = host
         self._port = port
+        self._client_id = client_id
+        self._username = username
+        self._password = password
         self.on_state = on_state
         self.on_status = on_status
         self.on_env = on_env
@@ -51,12 +55,18 @@ class MqttBridge:
         self._hb_topic = f"{prefix}/hb"
         self._event_topic = f"{prefix}/event"
 
-        self._client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id)
-        if username:
-            self._client.username_pw_set(username, password or None)
-        self._client.on_connect = self._on_connect
-        self._client.on_disconnect = self._on_disconnect
-        self._client.on_message = self._on_message
+        self._client = self._build_client()
+
+    def _build_client(self):
+        """A configured paho client, not yet dialled. Also used by `restart`."""
+        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
+                             client_id=self._client_id)
+        if self._username:
+            client.username_pw_set(self._username, self._password or None)
+        client.on_connect = self._on_connect
+        client.on_disconnect = self._on_disconnect
+        client.on_message = self._on_message
+        return client
 
     # ------------------------------------------------------------------ lifecycle
 
@@ -73,9 +83,36 @@ class MqttBridge:
 
     def start(self) -> None:
         """Connect in the background; paho retries on its own if the broker blinks."""
+        self._dial(self._client)
+
+    def _dial(self, client) -> None:
         log.info("connecting to mqtt://%s:%d", self._host, self._port)
-        self._client.connect_async(self._host, self._port, keepalive=KEEPALIVE_S)
-        self._client.loop_start()
+        client.connect_async(self._host, self._port, keepalive=KEEPALIVE_S)
+        client.loop_start()
+
+    def restart(self) -> None:
+        """Throw the client away and dial again -- never on the calling thread.
+
+        `start()` is paho's own retry, and it covers a blip. It does *not* cover
+        a client whose network thread has died: that one is not connected, fails
+        every publish, and never dials again by itself (2026-10-17, design
+        18.14). Rebuilding the object is what clears that state, and the work
+        runs on a daemon thread on purpose -- `loop_stop()` joins the old
+        thread, so a wedged one would block whoever called us.
+        """
+        old = self._client
+        log.warning("mqtt: re-dialling with a fresh client")
+        threading.Thread(target=self._reconnect, args=(old,),
+                         name="mqtt-restart", daemon=True).start()
+
+    def _reconnect(self, old) -> None:
+        try:
+            old.loop_stop()
+        except Exception:  # noqa: BLE001 - a dead client must not block the retry
+            log.exception("mqtt: the old client did not stop cleanly")
+        client = self._build_client()
+        self._client = client
+        self._dial(client)
 
     def stop(self) -> None:
         self._client.loop_stop()
@@ -107,14 +144,17 @@ class MqttBridge:
     # ------------------------------------------------------- paho callbacks (v2)
 
     def _on_connect(self, client, userdata, flags, reason_code, properties=None) -> None:
-        if getattr(reason_code, "is_failure", False) or reason_code != 0:
-            log.warning("mqtt connect failed: %s", reason_code)
-            return
-        log.info("mqtt connected; subscribing to %s, %s, %s and %s",
-                 self._state_topic, self._status_topic, self._env_topic,
-                 self._event_topic)
-        client.subscribe([(self._state_topic, 1), (self._status_topic, 1),
-                          (self._env_topic, 1), (self._event_topic, 1)])
+        try:
+            if getattr(reason_code, "is_failure", False) or reason_code != 0:
+                log.warning("mqtt connect failed: %s", reason_code)
+                return
+            log.info("mqtt connected; subscribing to %s, %s, %s and %s",
+                     self._state_topic, self._status_topic, self._env_topic,
+                     self._event_topic)
+            client.subscribe([(self._state_topic, 1), (self._status_topic, 1),
+                              (self._env_topic, 1), (self._event_topic, 1)])
+        except Exception:  # noqa: BLE001 - never let a callback kill paho's thread
+            log.exception("mqtt: the connect callback failed; the link stays up")
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties=None) -> None:
         log.warning("mqtt disconnected (%s)", reason_code)
@@ -129,15 +169,31 @@ class MqttBridge:
             log.warning("ignoring non-object payload on %s", message.topic)
             return
 
+        retained = bool(getattr(message, "retain", False))
         if message.topic == self._state_topic:
-            if self.on_state:
-                self.on_state(payload)
+            self._deliver(self.on_state, payload)
         elif message.topic == self._status_topic:
-            if self.on_status:
-                self.on_status(payload)
+            self._deliver(self.on_status, payload)
         elif message.topic == self._env_topic:
-            if self.on_env:
-                self.on_env(payload, bool(getattr(message, "retain", False)))
+            self._deliver(self.on_env, payload, retained)
         elif message.topic == self._event_topic:
-            if self.on_event:
-                self.on_event(payload, bool(getattr(message, "retain", False)))
+            self._deliver(self.on_event, payload, retained)
+
+    def _deliver(self, handler, *args) -> None:
+        """Run one payload handler; a failure here is data, not a dead link.
+
+        paho calls these on the thread that owns the socket, and an exception
+        escaping one ends that thread for good: `loop_start()` never comes back,
+        `connect_async` never re-dials, and the client sits there looking
+        configured while every publish fails. That is what happened on
+        2026-10-17 -- a Feishu call raised inside the `ac/state` handler and the
+        service stayed deaf and mute for 4.8 days (design 18.14). The Feishu
+        callbacks guard themselves the same way, for the same reason.
+        """
+        if handler is None:
+            return
+        try:
+            handler(*args)
+        except Exception:  # noqa: BLE001 - never let a handler kill the socket
+            log.exception("mqtt: the %s handler failed; the link stays up",
+                          getattr(handler, "__name__", "payload"))

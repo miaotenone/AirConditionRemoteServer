@@ -68,6 +68,32 @@ class FeishuClient:
         self._api = lark.Client.builder().app_id(app_id).app_secret(app_secret).build()
         self._thread: Optional[threading.Thread] = None
 
+    #: Tries per OpenAPI call. Spec §10 asks for one retry; the second attempt
+    #: only ever happens when the SDK *raised*, never on a plain
+    #: `success() == False` -- a rejection is rarely the kind a repeat fixes.
+    _ATTEMPTS = 2
+
+    def _call(self, what: str, invoke):
+        """One OpenAPI call: retried once, and never allowed to raise.
+
+        The SDK can throw *below* ``response.success()``: a truncated or non-JSON
+        body dies inside its own unmarshalling (``json.JSONDecodeError``). On
+        2026-10-17 one of those escaped straight through the MQTT callback
+        thread and took the whole link down with it (design 18.14). A failed
+        call here is only "the card did not update".
+        """
+        error = None
+        for attempt in range(1, self._ATTEMPTS + 1):
+            try:
+                return invoke()
+            except Exception as exc:  # noqa: BLE001 - a failed API call is data
+                error = exc
+                log.warning("%s raised on attempt %d/%d: %s",
+                            what, attempt, self._ATTEMPTS, exc)
+        log.error("%s failed after %d attempts", what, self._ATTEMPTS,
+                  exc_info=error)
+        return None
+
     # ---------------------------------------------------------------- outbound
 
     def send_card(self, chat_id: str, card: dict) -> Optional[str]:
@@ -84,11 +110,14 @@ class FeishuClient:
             )
             .build()
         )
-        response = self._api.im.v1.message.create(request)
+        response = self._call("send_card",
+                              lambda: self._api.im.v1.message.create(request))
+        if response is None:
+            return None
         if not response.success():
             log.error("send_card failed: code=%s msg=%s", response.code, response.msg)
             return None
-        return response.data.message_id
+        return getattr(getattr(response, "data", None), "message_id", None)
 
     def patch_card(self, message_id: str, card: dict) -> bool:
         """Replace the content of an existing card, in place."""
@@ -98,7 +127,10 @@ class FeishuClient:
             .request_body(PatchMessageRequestBody.builder().content(_dump(card)).build())
             .build()
         )
-        response = self._api.im.v1.message.patch(request)
+        response = self._call("patch_card",
+                              lambda: self._api.im.v1.message.patch(request))
+        if response is None:
+            return False
         if not response.success():
             log.error("patch_card failed: code=%s msg=%s", response.code, response.msg)
             return False
@@ -112,7 +144,10 @@ class FeishuClient:
         old card to a one-line notice instead (design D22).
         """
         request = DeleteMessageRequest.builder().message_id(message_id).build()
-        response = self._api.im.v1.message.delete(request)
+        response = self._call("recall_card",
+                              lambda: self._api.im.v1.message.delete(request))
+        if response is None:
+            return False
         if not response.success():
             log.warning("recall_card failed: code=%s msg=%s", response.code, response.msg)
             return False
@@ -136,7 +171,10 @@ class FeishuClient:
             )
             .build()
         )
-        response = self._api.im.v1.message.reply(request)
+        response = self._call("reply_text",
+                              lambda: self._api.im.v1.message.reply(request))
+        if response is None:
+            return False
         if not response.success():
             log.error("reply_text failed: code=%s msg=%s", response.code, response.msg)
             return False
@@ -160,7 +198,10 @@ class FeishuClient:
             )
             .build()
         )
-        response = self._api.im.v1.message.create(request)
+        response = self._call("send_text",
+                              lambda: self._api.im.v1.message.create(request))
+        if response is None:
+            return False
         if not response.success():
             log.error("send_text failed: code=%s msg=%s", response.code, response.msg)
             return False

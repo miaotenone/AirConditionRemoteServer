@@ -115,6 +115,14 @@ S_WEATHER_PUSHED_AT = "weather_pushed_at"
 _WEATHER_RETRY_S = 300.0        # 5 min between tries after a failure
 _WEATHER_CATCHUP_S = 2 * 3600.0  # ... and no attempt later than this
 
+#: How long the MQTT link may stay down before the service re-dials and says so.
+#:
+#: paho retries a blip by itself, so this only fires for a link that is really
+#: gone -- and a link that is gone, quietly, is exactly what nobody noticed for
+#: 4.8 days (design 18.14). Long enough to ride out a restart, short enough that
+#: the owner hears about it while it still matters.
+_MQTT_NOTICE_S = 120.0
+
 #: A click's card work waits this long before it touches Feishu.
 #:
 #: Feishu keeps a card update only when it is sent *after* the callback
@@ -166,6 +174,9 @@ class Service:
         self._last_env_record = 0.0
         self._last_hb = 0.0
         self._weather_retry_at = 0.0    # when a failed daily push may try again
+        self._mqtt_down_since = 0.0     # when the link was first seen down
+        self._mqtt_alerted = False      # the owner has been told about this outage
+        self._mqtt_publish_failed = False   # last heartbeat could not be sent
         self._lock = threading.RLock()
         self._actions: queue.Queue = queue.Queue()
         self._stop = threading.Event()
@@ -218,12 +229,22 @@ class Service:
             if not self.pending:
                 self.unconfirmed = False
                 self.view = state               # nothing outstanding: truth wins
-        self._render()
+        self._render_off_thread()
 
     def _on_mqtt_status(self, payload: dict) -> None:
         with self._lock:
             self.presence = presence_from_status(self.presence, payload)
-        self._render()
+        self._render_off_thread()
+
+    def _render_off_thread(self) -> None:
+        """Patch the card without blocking the MQTT network thread.
+
+        `_render` is a Feishu round trip, and these callbacks run on paho's
+        network thread -- the one thread the whole link depends on. Blocking it
+        stalls the socket; letting an exception out of it kills the thread
+        outright (design 18.14).
+        """
+        self._run_async(self._render)
 
     def _on_mqtt_env(self, payload: dict, retained: bool) -> None:
         """A DHT11 reading from the device (design §9.1).
@@ -271,7 +292,7 @@ class Service:
             self.state = replace(self.state, power=0)
             if not self.pending:
                 self.view = replace(self.view, power=0)
-        self._render()
+        self._render_off_thread()
         self._restore_after_failsafe(previous)
 
     def _restore_after_failsafe(self, previous: dict) -> bool:
@@ -847,6 +868,7 @@ class Service:
             self._expire_pending()
             self._record_env(now)
             self._heartbeat(now)
+            self._mqtt_step(now)
             self._run_due_schedules(now)
             self._maybe_push_weather(now)
             self._night_step(now)
@@ -886,7 +908,52 @@ class Service:
         if now - self._last_hb < self.settings.hb_interval_s:
             return
         self._last_hb = now
-        self.mqtt.publish_heartbeat()
+        # The publish is also the cheapest liveness probe we have for our own
+        # link: a client whose thread has died fails here while `connected` may
+        # still be stale-true, so the watchdog reads this flag too (design 18.14).
+        self._mqtt_publish_failed = not self.mqtt.publish_heartbeat()
+
+    def _mqtt_step(self, now: float) -> None:
+        """Watch the MQTT link; re-dial and tell the owner if it stays down.
+
+        paho retries a blip by itself, but a client whose *network thread* died
+        never comes back on its own: it is not connected, every publish fails,
+        and nothing else in the process notices. That is how the service sat
+        deaf and mute from 2026-10-17 to 2026-10-22 without a word (design
+        18.14) -- so now it notices, re-dials, and says so.
+        """
+        if self.mqtt.connected and not self._mqtt_publish_failed:
+            if self._mqtt_down_since:
+                log.warning("mqtt link is back after %.0fs",
+                            now - self._mqtt_down_since)
+                if self._mqtt_alerted:
+                    self._notify_owner("✅ 与空调网关的连接已恢复")
+                self._mqtt_down_since = 0.0
+                self._mqtt_alerted = False
+            return
+
+        if not self._mqtt_down_since:
+            self._mqtt_down_since = now
+            return
+        waited = now - self._mqtt_down_since
+        if waited < _MQTT_NOTICE_S:
+            return
+        if not self._mqtt_alerted:
+            self._mqtt_alerted = True
+            log.warning("mqtt has been down for %.0fs; re-dialling", waited)
+            self._notify_owner("⚠️ 与空调网关的 MQTT 连接已中断，正在自动重连…")
+        self.mqtt.restart()
+        self._mqtt_down_since = now        # next attempt one notice-period later
+
+    def _notify_owner(self, text: str) -> None:
+        """Best-effort owner notice; a failed send is only a log line.
+
+        Handed off rather than sent inline: the caller is the tick, and the
+        Feishu round trip is slow enough to delay the next heartbeat.
+        """
+        chat_id = self._chat_id()
+        if chat_id:
+            self._run_async(self.feishu.send_text, chat_id, text)
 
     def _run_due_schedules(self, now: float) -> None:
         """Fire the one-shot preset timers, dropping the badly-missed ones."""

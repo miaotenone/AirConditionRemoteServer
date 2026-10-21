@@ -796,6 +796,60 @@ lib_deps =
 | 服务端：单测 | ✅ `380 passed, 1 skipped`（那条 skip 是 `_past()` 的跨零点保护，不是缺陷）|
 | 服务端：线上不再误报 | 🟡 代码已部署并核对过 sha256；真正的判据要等你下次点卡片后看日志里还有没有 `marking unconfirmed`（它现在只该在设备真不答时出现）|
 
+### 18.14 服务端静默失联 4.8 天（2026-10-22 凌晨）
+
+**现象**：01:08 报「连接丢失」。网关侧一切正常（`ac/state`、`ac/env` 每 30s 照发），
+但线上 `ac/hb` **一条都没有** —— 塌的是服务端，而它自己一声不吭。
+
+**时间线**（全部是日志原文，不是推断）：
+
+| 时刻 | 证据 |
+|---|---|
+| 2026-10-17 06:31:12 | `journalctl -u ac-bot`：`Exception in thread paho-mqtt-client-ac-bot` … `json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)` —— paho 的网络线程**死了** |
+| 2026-10-17 06:31:35 | mosquitto 日志：`Client ac-bot has exceeded timeout, disconnecting.`（23s 没有 PINGREQ = 那条线程已经不在了）|
+| 之后 4.8 天 | mosquitto 里**再也没有** `New client connected … as ac-bot`；`ac/hb` 零条；`env_history` 不再增长；进程却还活着，systemd 看着一直 `active` |
+| 2026-10-22 01:20 | 重启服务：`ac/hb` 30s 一条，恢复 |
+
+**根因**：`ac/state` 的回调里跑着一次飞书 `patch_card`（`_on_mqtt_state` → `_render` → HTTPS）。
+那一次飞书回了个非 JSON 的响应体，lark SDK 在**它自己的 unmarshal 里**抛了 `JSONDecodeError`，
+异常从 `_on_message` 一路逃到 paho 的 `_thread_main`，线程退出 —— 而
+`connect_async` + `loop_start()` 的自动重连**就跑在这条线程上**：线程没了，就没有下一次重拨。
+此后 `publish()` 一律失败（日志里是 `could not publish …`），客户端成了哑巴 + 聋子。
+
+三个因素**叠加**才酿成 4.8 天：
+
+1. 异常能逃出回调（本次真因）。飞书侧的 `_on_card_action` / `_on_message` 早就用
+   `except Exception: log.exception` 护住了自己，MQTT 侧漏了；
+2. 一次飞书往返直接挂在 paho 的网络线程上 —— `_restore_after_failsafe` 的注释正是在防这件事，
+   但 `_render` 没照做；
+3. **没人盯链路本身**：设备侧有 5 分钟 failsafe，服务侧没有任何对应的看门逻辑，
+   也没有一句话告诉业主。
+
+**修法（服务端四层，每一层都能单独挡住下一次）**：
+
+1. `app/mqtt_client.py`：新增 `_deliver()`，四个 payload 回调**全部**经它转发，异常只记日志；
+   `_on_connect` 里的 `subscribe` 同样护住 —— 它也在同一条线程上；
+2. `app/feishu_client.py`：新增 `_call()`，每次 OpenAPI 调用「**绝不抛**，抛了就重试一次」
+   （规范 §10 早就写了重试一次，代码里一直没有）；`success() == False` 的普通拒绝**不重试**
+   （重试多半也没用，还白花配额）；`send_card` 取 `data.message_id` 改成 `getattr` 兜底；
+3. `app/main.py`：`_render_off_thread()` —— MQTT 回调里的卡片 patch 交出去（`_run_async`），
+   paho 线程不再做飞书往返。`tick` 侧的 `_render()` 仍是同步的，行为不变；
+4. `app/main.py` 看门（`_mqtt_step()`，每秒一次）：链路连续 `_MQTT_NOTICE_S = 120s` 不通
+   （`connected == False` **或**心跳发不出去）⇒ 给业主发一条飞书提醒（同一次故障只发一次）
+   + `MqttBridge.restart()`：换一个**全新**的 paho 客户端重拨，且 `loop_stop()` 放在后台线程里
+   （join 一条卡住的线程会把 tick 一起拖死）；链路回来后补发一条「已恢复」。
+
+**为什么不只做第 4 层**：看门只能看到「通不通」，而且在本次事故里它要等满 2 分钟才动手；
+第 1、2 层才是把病根去掉 —— 回调里抛异常**不能再**是断链。第 4 层治的是「下次换个原因又静默死亡」。
+
+**验证**：`pytest -q` → **400 passed**（新增 19 条；把第 1–4 层分别退回旧行为后，其中
+**10 条变红** —— paho 回调抛异常、飞书 SDK 抛异常、卡片仍在 paho 线程上渲染、看门不动作）。
+**既有断言一行未改。**
+
+**顺带量到的事实**（说明当晚空调为什么是关着的，不是修坏的）：20:17 与 20:57 那两次
+「开机 / 制热 26℃」都停在 `could not publish` —— 命令根本没发出去，设备从没收到过；
+设备自己的认知一直是 `power=0`，所以失联 5 分钟触发的 failsafe 关机也是空动作。
+
 ---
 
 ## 19. 待你拍板 / 已拍板

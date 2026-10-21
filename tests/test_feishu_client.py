@@ -6,6 +6,7 @@ phone. The API surface is swapped for a stub, which is the only way to test
 "what did we send" without credentials.
 """
 
+import json
 import types
 
 from app.feishu_client import FeishuClient
@@ -166,3 +167,80 @@ def test_a_broken_click_payload_never_kills_the_socket():
     client, seen = _action_client()
     assert client._on_card_action(types.SimpleNamespace(event=None)) is not None
     assert seen == [("", "", "", None, None, None, None)]
+
+
+# ------------------------------------------------------- an API call that throws
+#
+# 设计 18.14。SDK 可以在 response.success() *之前* 就抛：2026-10-17 一个空/非 JSON
+# 的响应体死在它自己的 unmarshal 里（json.JSONDecodeError），异常一路穿过 MQTT
+# 回调线程，把整条链路打死 4.8 天。所以每一次调用都只能是「没更新成功」。
+
+
+def test_a_body_the_sdk_cannot_parse_is_only_a_failed_call(caplog):
+    client, _ = make_client()
+    attempts = []
+
+    def boom(request):
+        attempts.append(request)
+        raise json.JSONDecodeError("Expecting value", "", 0)
+
+    client._api.im.v1.message.patch = boom
+    with caplog.at_level("WARNING", logger="app.feishu_client"):
+        assert client.patch_card("om_1", {"a": 1}) is False
+    assert len(attempts) == 2                       # 规范 §10：重试一次
+    assert "patch_card raised on attempt 1/2" in caplog.text
+
+
+def test_send_card_survives_the_same_way(caplog):
+    client, _ = make_client()
+
+    def boom(request):
+        raise RuntimeError("connection reset")
+
+    client._api.im.v1.message.create = boom
+    with caplog.at_level("WARNING", logger="app.feishu_client"):
+        assert client.send_card("oc_1", {"a": 1}) is None
+
+
+def test_recall_and_send_text_never_raise_either(caplog):
+    client, _ = make_client()
+
+    def boom(request):
+        raise RuntimeError("boom")
+
+    client._api.im.v1.message.delete = boom
+    client._api.im.v1.message.create = boom
+    with caplog.at_level("WARNING", logger="app.feishu_client"):
+        assert client.recall_card("om_1") is False
+        assert client.send_text("oc_1", "hi") is False
+
+
+def test_a_plain_rejection_is_not_retried(caplog):
+    # 被拒（success()=False）多半重试也没用，别白花配额 —— 只有抛异常才重试。
+    client, _ = make_client()
+    calls = []
+
+    def denied(request):
+        calls.append(request)
+        return types.SimpleNamespace(success=lambda: False, code=99991663,
+                                     msg="denied", data=None)
+
+    client._api.im.v1.message.patch = denied
+    with caplog.at_level("ERROR", logger="app.feishu_client"):
+        assert client.patch_card("om_1", {"a": 1}) is False
+    assert len(calls) == 1
+    assert "patch_card failed: code=99991663" in caplog.text
+
+
+def test_a_successful_send_still_reports_its_message_id():
+    client, _ = make_client()
+    client._api.im.v1.message.create = lambda request: _ok("om_new")
+    assert client.send_card("oc_1", {"a": 1}) == "om_new"
+
+
+def test_a_success_without_a_body_reports_no_message_id():
+    # 契约之外的响应不该在调用线程上炸成 AttributeError。
+    client, _ = make_client()
+    client._api.im.v1.message.create = lambda request: types.SimpleNamespace(
+        success=lambda: True, code=0, msg="ok", data=None)
+    assert client.send_card("oc_1", {"a": 1}) is None

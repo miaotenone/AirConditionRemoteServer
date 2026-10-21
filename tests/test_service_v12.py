@@ -13,7 +13,7 @@ import pytest
 from app.cards import SETTINGS_TITLE
 from app.config import Settings
 from app.env import EnvReading
-from app.main import Service, _WEATHER_CATCHUP_S, _WEATHER_RETRY_S
+from app.main import Service, _MQTT_NOTICE_S, _WEATHER_CATCHUP_S, _WEATHER_RETRY_S
 from app.preset import Preset
 from app.state import AC_FAN, AC_MODE, AcState, Presence
 from app.weather import WeatherNow, recommend
@@ -818,3 +818,117 @@ def test_a_command_that_could_not_be_published_still_times_out(tmp_path):
     service._confirm_deadline = time.monotonic() - 1
     service._expire_pending()
     assert service.unconfirmed is True
+
+
+# ------------------------------------------------------------ 18.14 链路静默死亡
+
+
+class FakeMqtt:
+    """Just enough bridge for the watchdog: a liveness flag and a counter."""
+
+    def __init__(self, connected=True, publish_ok=True):
+        self.connected = connected
+        self.publish_ok = publish_ok
+        self.restarts = 0
+
+    def publish_heartbeat(self):
+        return self.publish_ok
+
+    def restart(self):
+        self.restarts += 1
+
+
+def test_a_link_that_stays_down_is_redialled_and_reported_once(tmp_path):
+    # paho 自己会重拨一次抖动，但线程死了就再也不会 —— 现在服务自己发现，
+    # 自己重拨，并且告诉业主，而不是安静地聋哑 4.8 天。
+    service = build_service(tmp_path)
+    service.store.set_setting("chat_id", "oc_1")
+    service.mqtt = FakeMqtt(connected=False)
+
+    service._mqtt_step(1000.0)                      # 第一次发现：开始计时
+    service._mqtt_step(1000.0 + _MQTT_NOTICE_S - 1)
+    assert service.mqtt.restarts == 0
+    assert service.feishu.sent_text == []
+
+    service._mqtt_step(1000.0 + _MQTT_NOTICE_S)     # 真的断了：重拨 + 报一次
+    assert service.mqtt.restarts == 1
+    assert service.feishu.sent_text == [
+        ("oc_1", "⚠️ 与空调网关的 MQTT 连接已中断，正在自动重连…")]
+
+    service._mqtt_step(1000.0 + 2 * _MQTT_NOTICE_S)
+    assert service.mqtt.restarts == 2
+    assert len(service.feishu.sent_text) == 1       # 同一次故障只报一次
+
+
+def test_a_healthy_link_is_left_alone(tmp_path):
+    service = build_service(tmp_path)
+    service.store.set_setting("chat_id", "oc_1")
+    service.mqtt = FakeMqtt(connected=True)
+    service._mqtt_step(1000.0)
+    service._mqtt_step(9999.0)
+    assert service.mqtt.restarts == 0
+    assert service.feishu.sent_text == []
+    assert service._mqtt_down_since == 0.0
+
+
+def test_a_recovered_link_says_so_once(tmp_path):
+    service = build_service(tmp_path)
+    service.store.set_setting("chat_id", "oc_1")
+    service.mqtt = FakeMqtt(connected=False)
+    service._mqtt_step(1000.0)
+    service._mqtt_step(1000.0 + _MQTT_NOTICE_S)
+
+    service.mqtt.connected = True
+    service._mqtt_step(1000.0 + _MQTT_NOTICE_S + 5)
+    assert service.feishu.sent_text[-1] == ("oc_1", "✅ 与空调网关的连接已恢复")
+    assert service._mqtt_down_since == 0.0
+    assert service._mqtt_alerted is False
+
+    service._mqtt_step(1000.0 + _MQTT_NOTICE_S + 500)
+    assert len(service.feishu.sent_text) == 2       # 恢复只播报一次
+
+
+def test_a_heartbeat_that_cannot_be_published_counts_as_a_dead_link(tmp_path):
+    # connected 可能是过期的 True（网络线程已经死了）；发不出去才是硬证据。
+    service = build_service(tmp_path, hb_interval_s=30)
+    service.mqtt = FakeMqtt(connected=True, publish_ok=False)
+    service._heartbeat(1000.0)
+    assert service._mqtt_publish_failed is True
+    service._mqtt_step(1000.0)
+    service._mqtt_step(1000.0 + _MQTT_NOTICE_S)
+    assert service.mqtt.restarts == 1
+
+
+def test_a_published_heartbeat_clears_the_publish_failure(tmp_path):
+    service = build_service(tmp_path, hb_interval_s=30)
+    service.mqtt = FakeMqtt(connected=True, publish_ok=False)
+    service._heartbeat(1000.0)
+    service.mqtt.publish_ok = True
+    service._heartbeat(2000.0)
+    assert service._mqtt_publish_failed is False
+
+
+def test_an_mqtt_update_does_not_render_on_the_paho_thread(tmp_path):
+    # 卡片 patch 是一次飞书往返，绝不能跑在 paho 的网络线程上 —— 那正是
+    # 2026-10-17 打死链路的地方。
+    service = build_service(tmp_path)
+    seen = []
+    service._render = lambda: seen.append("render")
+    service._run_async = lambda fn, *args: seen.append(fn)
+
+    service._on_mqtt_state({"online": True, "power": 0, "mode": 1,
+                            "temp": 26, "fan": 1})
+    service._on_mqtt_status({"online": True})
+    assert seen == [service._render, service._render]
+    assert "render" not in seen
+
+
+def test_an_event_renders_off_the_paho_thread_too(tmp_path):
+    service = build_service(tmp_path)
+    seen = []
+    service._render = lambda: seen.append("render")
+    service._run_async = lambda fn, *args: seen.append(fn)
+    service._on_mqtt_event({"type": "failsafe_off", "ts": time.time(),
+                            "prev": {"power": 0}}, False)
+    assert seen == [service._render]
+    assert "render" not in seen
