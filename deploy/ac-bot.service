@@ -29,6 +29,13 @@ After=network-online.target mosquitto.service
 Wants=network-online.target
 # The bot is useless without the local broker, so tie them together.
 Requires=mosquitto.service
+# ...and follow it, not merely depend on it. `Requires=` propagates a *stop*
+# (a broker shutdown takes the bot down) but nothing brings the bot back, so
+# bouncing mosquitto used to leave the bridge dead: no heartbeat, and five
+# minutes later the device's fail-safe switches the AC off with no warning.
+# `PartOf=` propagates restarts as well, so `systemctl restart mosquitto`
+# brings the bridge back with it.
+PartOf=mosquitto.service
 
 [Service]
 Type=simple
