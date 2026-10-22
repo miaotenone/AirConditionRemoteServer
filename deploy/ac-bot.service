@@ -58,3 +58,8 @@ Nice=5
 
 [Install]
 WantedBy=multi-user.target
+# ...and be pulled up by the broker starting, which is the half neither
+# `Requires=` nor `PartOf=` covers: `systemctl stop mosquitto` followed later by
+# `systemctl start mosquitto` leaves the requiring unit down unless something
+# wants it. With this, starting the broker starts the bridge.
+WantedBy=mosquitto.service
