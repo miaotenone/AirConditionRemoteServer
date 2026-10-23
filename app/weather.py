@@ -130,17 +130,35 @@ def _next2h_delta(current: dict, hourly: dict) -> int:
     The series starts at 00:00, so reading the first and third entries measured
     00:00→02:00 -- something that has already happened -- and the nudge was
     never about the next two hours (design Q2b, fixed 2026-10-23). The current
-    hour is located by its ``current.time`` stamp, which Open-Meteo always
-    sends; when a payload carries none, the first three entries are used, which
-    is what the older fixtures look like.
+    hour is located by its ``current.time`` stamp, compared on the hour because
+    that stamp carries minutes and the hourly ones do not. A payload with no
+    stamp at all cannot say where "now" is: the oldest fixtures look like that
+    and are still read from the first entries.
     """
     temps = hourly.get("temperature_2m") or []
     if not isinstance(temps, list) or len(temps) < 3:
         return 0
 
     times = hourly.get("time") or []
-    now_at = current.get("time")
-    index = times.index(now_at) if isinstance(times, list) and now_at in times else 0
+    if not isinstance(times, list):
+        times = []
+    stamp = current.get("time")
+    if isinstance(stamp, str):
+        # Compare on the hour: `current.time` carries minutes ("16:15") while
+        # the hourly stamps sit on the hour ("16:00"), which is exactly how the
+        # live payload looks. A stamp we cannot place in the series means we
+        # cannot see the next two hours either -- no nudge, guessed from
+        # nothing.
+        hour = stamp[:13]
+        index = next((i for i, t in enumerate(times)
+                      if isinstance(t, str) and t[:13] == hour), None)
+        if index is None:
+            return 0
+    else:
+        # No stamp: the payload cannot say which hour is "now". The older
+        # fixtures look like this, and they were read from the first entries.
+        index = 0
+
     if index + 2 >= len(temps):
         return 0                    # the series stops before "in two hours"
 

@@ -178,10 +178,11 @@ def test_the_two_hour_trend_starts_at_the_current_hour():
 
     Reading those made the cold-snap nudge a statement about 00:00→02:00 --
     something that has already happened -- instead of about the next two hours
-    (design Q2b, fixed 2026-10-23).
+    (design Q2b, fixed 2026-10-23). ``current.time`` carries minutes while the
+    hourly stamps sit on the hour, which is what the live payload looks like.
     """
     payload = {
-        "current": {"temperature_2m": 30.0, "time": "2026-10-23T15:00"},
+        "current": {"temperature_2m": 30.0, "time": "2026-10-23T15:20"},
         "hourly": {
             "time": ["2026-10-23T13:00", "2026-10-23T14:00",
                      "2026-10-23T15:00", "2026-10-23T16:00",
@@ -191,6 +192,15 @@ def test_the_two_hour_trend_starts_at_the_current_hour():
     }
     now = parse_open_meteo(payload)
     assert now.next2h_delta_c == -2      # 15:00 → 17:00, not 13:00 → 15:00
+
+
+def test_the_two_hour_trend_ignores_a_stamp_from_another_day():
+    payload = {"current": {"temperature_2m": 20.0, "time": "2026-10-23T15:20"},
+               "hourly": {"time": ["2026-10-22T15:00", "2026-10-22T16:00",
+                                   "2026-10-22T17:00"],
+                          "temperature_2m": [30.0, 31.0, 32.0]}}
+    # 昨天的 15:00 不是「现在」；找不到就当没有未来，别把旧的温差当趋势。
+    assert parse_open_meteo(payload).next2h_delta_c == 0
 
 
 def test_the_two_hour_trend_is_dropped_when_the_series_stops_at_now():
