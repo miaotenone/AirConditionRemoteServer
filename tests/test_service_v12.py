@@ -1045,3 +1045,63 @@ def test_executing_a_suggestion_the_room_already_meets_sends_nothing(tmp_path):
 
     assert _queued(service) == []
     assert "不用开" in visible_text(service.feishu.cards["om_1"])
+
+
+# --------------------------- design 18.16: the ticker cannot die, and every
+# command that came from the owner buys the night loop off. Both are the same
+# lesson as 18.14/18.15: the thread that owes the device its heartbeat must not
+# be able to go quiet, and the night loop must not undo what was just asked for.
+
+
+def test_a_failing_tick_pass_cannot_kill_the_ticker(tmp_path, caplog):
+    service = build_service(tmp_path)
+    service.mqtt = FakeMqtt(connected=True, publish_ok=True)
+    service._render_wanted.clear()
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("store hiccup")
+
+    service._record_env = boom
+    with caplog.at_level("ERROR", logger="app.main"):
+        service._tick_once()             # 抛出去 = ticker 线程死 = 心跳停
+    assert "carrying on" in caplog.text
+    assert not service._render_wanted.is_set(), "这一趟确实是在半路断的"
+
+    service._record_env = Service._record_env.__get__(service, Service)
+    service._tick_once()
+    assert service._render_wanted.is_set(), "下一趟照常走完"
+
+
+def test_applying_a_preset_yields_to_the_night_loop(tmp_path):
+    # 18.7：手动命令赢 30 分钟。点预设也是手动 —— 否则夜间闭环十分钟后
+    # 就把你刚点的设置改回去了。
+    service = build_service(tmp_path)
+    service._apply_preset(_preset(), "oc_1")
+    assert service._loop.manual_until > time.time() + 60
+
+
+def test_executing_the_weather_suggestion_yields_to_the_night_loop(tmp_path):
+    service = build_service(tmp_path)
+    service._last_weather = (WeatherNow(36, 50, -1), recommend(36))
+    service._on_card_action("ou_test", "oc_1", "om_1",
+                            {"a": "weather_exec", "v": 0}, None)
+    assert service._loop.manual_until > time.time() + 60
+
+
+def test_a_suggestion_the_room_meets_does_not_yield(tmp_path):
+    # 「不用开」什么都没改，也就没什么好让的。
+    service = build_service(tmp_path)
+    service._last_weather = (WeatherNow(16, 36, 0), recommend(16, 0, room_c=21))
+    service._on_card_action("ou_test", "oc_1", "om_1",
+                            {"a": "weather_exec", "v": 0}, None)
+    assert service._loop.manual_until == 0.0
+
+
+def test_a_scheduled_preset_yields_too(tmp_path):
+    # 预约也是业主自己的意思，不是闭环的意思。
+    service = build_service(tmp_path)
+    preset_id = service.store.save_preset(_preset(name="睡前"))
+    service.store.add_schedule("preset", {"preset_id": preset_id},
+                               time.time() - 1)
+    service._run_due_schedules(time.time())
+    assert service._loop.manual_until > time.time() + 60

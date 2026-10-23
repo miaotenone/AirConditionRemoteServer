@@ -390,7 +390,7 @@ class Service:
                     self._actions.put((action, value))
                 self._begin_pending()
                 if intent.actions:
-                    self._loop = replace(self._loop, manual_until=time.time() + MANUAL_YIELD_S)
+                    self._yield_to_manual()
 
         self._ensure_card(chat_id)
         self._render()
@@ -576,7 +576,7 @@ class Service:
             if name != "refresh":
                 self.view = apply_action(self.view, name, number)
                 self._begin_pending()
-                self._loop = replace(self._loop, manual_until=time.time() + MANUAL_YIELD_S)
+                self._yield_to_manual()
             # The debounced publisher does the actual work.
             self._actions.put(action)
 
@@ -748,6 +748,7 @@ class Service:
             text = render_preset_applied(preset, "at", at)
         else:
             self._queue_actions(preset_actions(preset))
+            self._yield_to_manual()
             text = render_preset_applied(preset, "immediate", None)
         if message_id:
             self.feishu.reply_text(message_id, text)
@@ -825,6 +826,7 @@ class Service:
         if recommendation.temp_used:
             actions.append(("temp", recommendation.temp))
         self._queue_actions(actions)
+        self._yield_to_manual()
         self._show_card(CARD_WEATHER, chat_id,
                         build_weather_card(now, recommendation,
                                            status="✅ 已按建议执行"),
@@ -909,16 +911,26 @@ class Service:
             self._tick_once()
 
     def _tick_once(self) -> None:
-        """A single pass of the tick; the loop above is the only real caller."""
-        now = time.time()
-        self._expire_pending()
-        self._record_env(now)
-        self._heartbeat(now)
-        self._mqtt_step(now)
-        self._run_due_schedules(now)
-        self._maybe_push_weather(now)
-        self._night_step(now)
-        self._request_render()      # the patch itself is the renderer's job
+        """A single pass of the tick; the loop above is the only real caller.
+
+        A pass is not allowed to raise. This is the thread that owes the device
+        its heartbeat, and a thread that dies quietly looks to the gateway
+        exactly like "the service is gone" -- five minutes later it switches the
+        AC off (design 18.14, 18.15). A bad pass is logged and the next one
+        tries again, which is also all a transient store or MQTT hiccup needs.
+        """
+        try:
+            now = time.time()
+            self._expire_pending()
+            self._record_env(now)
+            self._heartbeat(now)
+            self._mqtt_step(now)
+            self._run_due_schedules(now)
+            self._maybe_push_weather(now)
+            self._night_step(now)
+            self._request_render()  # the patch itself is the renderer's job
+        except Exception:  # noqa: BLE001 - one bad pass is data, not the end
+            log.exception("tick pass failed; carrying on")
 
     def _expire_pending(self) -> None:
         changed = False
@@ -1023,6 +1035,7 @@ class Service:
             log.info("scheduled preset %r no longer exists", job.payload)
             return
         self._queue_actions(preset_actions(preset))
+        self._yield_to_manual()
         chat_id = self._chat_id()
         if chat_id:
             # The receipt is a Feishu round trip; the tick must not wait on it
@@ -1104,6 +1117,19 @@ class Service:
             self._loop = replace(self._loop, last_action_at=now)
 
     # ------------------------------------------------------------------ helpers
+
+    def _yield_to_manual(self) -> None:
+        """Make the night loop stand down: a command wins for 30 minutes.
+
+        Design 18.7. The remote buttons and plain-text commands have always done
+        this. Every command that carries the owner's intent does -- a click on
+        the preset or weather card is just as manual as a button, and having the
+        loop undo it ten minutes later is exactly the fight the yield window
+        exists to prevent (design 18.16).
+        """
+        with self._lock:
+            self._loop = replace(self._loop,
+                                 manual_until=time.time() + MANUAL_YIELD_S)
 
     def _queue_actions(self, actions) -> None:
         """Send actions down the one shared path: optimistic view + queue."""
