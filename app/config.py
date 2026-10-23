@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     #: "Feishu sent nothing" apart from "the SDK received it but did not
     #: route it to our handler". Leave it at INFO unless debugging.
     feishu_log_level: str = "INFO"
+    #: Seconds the OpenAPI client waits before giving up on one call. The SDK's
+    #: own default is 30 and every call retries once, so a dead internet could
+    #: hold the card-patching thread for a minute (design 18.15).
+    feishu_timeout_s: float = 5.0
     #: Rapid taps inside this window collapse into one `ac/cmd` (spec 5.5).
     debounce_ms: int = 400
     #: No `ac/state` back within this long -> card shows "⚠️ 未确认" (spec 10).

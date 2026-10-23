@@ -2,7 +2,10 @@
 
 Thresholds are the user's own table (design Q2): outdoors 35℃ and up suggests
 26℃ cooling, down through "just ventilate" to "heat". A forecast about to get
-much cooler nudges the suggestion up a degree (design Q2b).
+much cooler nudges the suggestion up a degree (design Q2b). When the DHT11
+reading is known the table's target is checked against the room it would act on
+(design Q2c): a target the room already meets is "don't bother", and one that
+came out on the wrong side of the room is moved to the near side.
 
 The network calls live here too but behind their own functions, so the whole
 decision is unit tested from a fixed payload.
@@ -26,6 +29,14 @@ HEAT = AC_MODE["heat"]
 #: A drop of this much over the next two hours counts as a cold snap.
 COLD_SNAP_DELTA = -2
 
+#: How close the room may sit to a target before running the AC would be
+#: pointless -- the table's target is then already met (design Q2c).
+COMFORT_BAND = 1
+
+#: Where a target that landed on the wrong side of the room is moved to: the AC
+#: only ever gets a suggestion with a real gap to close (design Q2c).
+ROOM_MARGIN = 2
+
 
 @dataclass(frozen=True)
 class Recommendation:
@@ -35,6 +46,9 @@ class Recommendation:
     temp: int
     fan: int
     note: str
+    #: True when the room is already where the table would put it: the card says
+    #: so and "立即执行" sends nothing (design Q2c).
+    skip: bool = False
 
     @property
     def temp_used(self) -> bool:
@@ -51,34 +65,89 @@ class WeatherNow:
     next2h_delta_c: int = 0
 
 
-def recommend(outdoor_c: float, trend_delta_c: float = 0) -> Recommendation:
+def recommend(outdoor_c: float, trend_delta_c: float = 0,
+              room_c: Optional[float] = None) -> Recommendation:
     """Turn an outdoor temperature into a suggested AC setting.
 
     Bands (design Q2): ``>=35 -> 26``, ``30..35 -> 25``, ``26..30 -> 24``,
     ``18..26 -> fan only``, ``<18 -> heat``. A coming cold snap raises the
     cooling/heating target by one degree (design Q2b).
+
+    With a DHT11 reading in hand the target is also checked against the room it
+    would act on (design Q2c, 2026-10-23). The report that prompted it: outdoors
+    16℃ and a 23℃ room produced "建议制热 20℃", i.e. heat the room *colder* than
+    it already is. So a target the room already meets comes back as "不用开",
+    and one on the wrong side of the room is moved `ROOM_MARGIN` to the useful
+    side. ``room_c=None`` keeps the plain table, which is what a service with no
+    DHT11 has to go on.
     """
     outdoor = int(round(outdoor_c))
 
     if outdoor >= 35:
-        mode, temp, note = COOL, 26, f"外面 {outdoor}℃，建议制冷 26℃"
+        mode, temp, advice = COOL, 26, "建议制冷 26℃"
     elif outdoor >= 30:
-        mode, temp, note = COOL, 25, f"外面 {outdoor}℃，建议制冷 25℃"
+        mode, temp, advice = COOL, 25, "建议制冷 25℃"
     elif outdoor >= 26:
-        mode, temp, note = COOL, 24, f"外面 {outdoor}℃，建议制冷 24℃"
+        mode, temp, advice = COOL, 24, "建议制冷 24℃"
     elif outdoor >= 18:
-        mode, temp, note = FAN, TEMP_DEFAULT, f"外面 {outdoor}℃，凉爽，建议送风通风"
+        mode, temp, advice = FAN, TEMP_DEFAULT, "凉爽，建议送风通风"
     else:
-        mode, temp, note = HEAT, 20, f"外面 {outdoor}℃，建议制热 20℃"
+        mode, temp, advice = HEAT, 20, "建议制热 20℃"
 
     if mode != FAN and trend_delta_c <= COLD_SNAP_DELTA:
         temp = clamp_temp(temp + 1)
-        note += "（两小时内要降温，上调 1℃）"
+        advice += "（两小时内要降温，上调 1℃）"
 
-    return Recommendation(mode=mode, temp=temp, fan=0, note=note)
+    room = None if room_c is None else int(round(room_c))
+    if room is None:
+        return Recommendation(mode=mode, temp=temp, fan=0,
+                              note=f"外面 {outdoor}℃，{advice}")
+
+    if mode != FAN:
+        #: Positive means the target is warmer than the room.
+        gap = temp - room
+        if abs(gap) <= COMFORT_BAND:
+            return Recommendation(
+                mode=FAN, temp=TEMP_DEFAULT, fan=0, skip=True,
+                note=f"外面 {outdoor}℃，室温 {room}℃ 已经在 {temp}℃ 附近，"
+                     "不用开空调")
+        heating = mode == HEAT
+        if (heating and gap < 0) or (not heating and gap > 0):
+            near = room + ROOM_MARGIN if heating else room - ROOM_MARGIN
+            temp = clamp_temp(near)
+            advice = f"建议{'制热' if heating else '制冷'} {temp}℃"
+
+    return Recommendation(mode=mode, temp=temp, fan=0,
+                          note=f"外面 {outdoor}℃，室温 {room}℃，{advice}")
 
 
 # ------------------------------------------------------------------- fetching
+
+
+def _next2h_delta(current: dict, hourly: dict) -> int:
+    """The change over the two hours *after* the current one, in whole degrees.
+
+    The series starts at 00:00, so reading the first and third entries measured
+    00:00→02:00 -- something that has already happened -- and the nudge was
+    never about the next two hours (design Q2b, fixed 2026-10-23). The current
+    hour is located by its ``current.time`` stamp, which Open-Meteo always
+    sends; when a payload carries none, the first three entries are used, which
+    is what the older fixtures look like.
+    """
+    temps = hourly.get("temperature_2m") or []
+    if not isinstance(temps, list) or len(temps) < 3:
+        return 0
+
+    times = hourly.get("time") or []
+    now_at = current.get("time")
+    index = times.index(now_at) if isinstance(times, list) and now_at in times else 0
+    if index + 2 >= len(temps):
+        return 0                    # the series stops before "in two hours"
+
+    here, there = temps[index], temps[index + 2]
+    if not isinstance(here, (int, float)) or not isinstance(there, (int, float)):
+        return 0
+    return int(round(float(there) - float(here)))
 
 
 def parse_open_meteo(payload: dict) -> Optional[WeatherNow]:
@@ -101,11 +170,7 @@ def parse_open_meteo(payload: dict) -> Optional[WeatherNow]:
     except (TypeError, ValueError):
         humidity = None
 
-    delta = 0
-    hourly = ((payload.get("hourly") or {}).get("temperature_2m")) or []
-    if len(hourly) >= 3 and isinstance(hourly[0], (int, float)) \
-            and isinstance(hourly[2], (int, float)):
-        delta = int(round(float(hourly[2]) - float(hourly[0])))
+    delta = _next2h_delta(current, payload.get("hourly") or {})
 
     return WeatherNow(outdoor_c=outdoor, humidity=humidity, next2h_delta_c=delta)
 

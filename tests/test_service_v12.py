@@ -5,6 +5,7 @@ the whole dispatch path (card-by-kind bookkeeping, form submits, the history /
 night / weather / preset branches, and the tick helpers) is pinned here.
 """
 
+import threading
 import time
 from datetime import datetime, timedelta
 
@@ -932,3 +933,115 @@ def test_an_event_renders_off_the_paho_thread_too(tmp_path):
                             "prev": {"power": 0}}, False)
     assert seen == [service._render]
     assert "render" not in seen
+
+
+# ------------------------------ design 18.15: the tick never waits on Feishu
+# A card patch is a Feishu round trip, and the tick owes the device a heartbeat
+# on the same thread. Five minutes without one and the gateway decides the
+# service is dead and turns the AC off -- so "internet down, LAN fine" could
+# switch the AC off. Worse, a failed patch left the card "not yet rendered", so
+# the next second tried again: no backoff, no ceiling, one dead internet.
+
+
+def test_the_tick_asks_the_renderer_instead_of_calling_feishu(tmp_path):
+    service = build_service(tmp_path)
+    service.mqtt = FakeMqtt(connected=True, publish_ok=True)
+    service.store.set_message_id("ou_test", "om_remote")
+    calls = []
+    service.feishu.patch_card = lambda *args: calls.append(args)
+
+    service._tick_once()
+
+    assert calls == [], "the tick must not do the Feishu round trip itself"
+    assert service._render_wanted.is_set(), "it asks the renderer instead"
+
+
+def test_the_renderer_thread_is_the_one_that_patches_the_card(tmp_path):
+    service = build_service(tmp_path)
+    service.store.set_message_id("ou_test", "om_remote")
+    thread = threading.Thread(target=service._renderer_worker, daemon=True)
+    thread.start()
+    try:
+        service._request_render()
+        for _ in range(200):
+            if service.feishu.patched:
+                break
+            time.sleep(0.02)
+        assert "om_remote" in service.feishu.patched
+    finally:
+        service._stop.set()
+        service._render_wanted.set()
+        thread.join(timeout=2)
+
+
+def test_a_failed_patch_backs_off_before_trying_the_same_card_again(tmp_path):
+    service = build_service(tmp_path)
+    service.store.set_message_id("ou_test", "om_remote")
+    attempts = []
+
+    def failing(message_id, card):
+        attempts.append(message_id)
+        return False
+
+    service.feishu.patch_card = failing
+
+    service._render_if_due()
+    assert len(attempts) == 1
+    service._render_if_due()
+    assert len(attempts) == 1, "退避窗口内不该重复打飞书"
+
+    service._render_retry_at = 0.0              # 窗口过了：再试一次
+    service._render_if_due()
+    assert len(attempts) == 2
+
+
+def test_the_weather_push_does_not_run_on_the_tick_thread(tmp_path):
+    # 取数是网络往返，推卡也是；两样都不该占住心跳那条线程。
+    service = build_service(tmp_path)
+    service.store.set_setting("chat_id", "oc_1")
+    now = datetime.now().replace(second=0, microsecond=0)
+    service.store.set_setting("push_time", now.strftime("%H:%M"))
+    seen = []
+    service._run_async = lambda fn, *args: seen.append(fn)
+
+    service._maybe_push_weather(now.timestamp() + 5)
+
+    assert seen and seen[0] == service._push_weather_blocking
+    assert service.store.get_setting("weather_pushed_at", "0") == "0"
+
+
+def test_the_weather_suggestion_uses_the_room_reading(tmp_path, monkeypatch):
+    service = build_service(tmp_path)
+    monkeypatch.setattr("app.main.fetch_now",
+                        lambda **kwargs: WeatherNow(outdoor_c=16, humidity=36))
+    service.env = EnvReading(temp=23, humidity=36, ok=True)
+    service.env_at = time.time()
+
+    _, rec = service._weather_snapshot()
+
+    assert rec.temp == 25, "室温 23℃ 的房间里不该推「制热 20℃」"
+    assert "室温 23℃" in rec.note
+
+
+def test_a_stale_room_reading_is_left_out_of_the_suggestion(tmp_path, monkeypatch):
+    service = build_service(tmp_path)
+    monkeypatch.setattr("app.main.fetch_now",
+                        lambda **kwargs: WeatherNow(outdoor_c=16))
+    service.env = EnvReading(temp=23, humidity=36, ok=True)
+    service.env_at = time.time() - 3600
+
+    _, rec = service._weather_snapshot()
+
+    assert rec.temp == 20
+    assert "室温" not in rec.note
+
+
+def test_executing_a_suggestion_the_room_already_meets_sends_nothing(tmp_path):
+    service = build_service(tmp_path)
+    service._last_weather = (WeatherNow(16, 36, 0), recommend(16, 0, room_c=21))
+
+    service._on_card_action("ou_test", "oc_1", "om_1",
+                            {"a": "weather_exec", "v": 0}, None)
+
+    assert _queued(service) == []
+    assert "不用开" in visible_text(service.feishu.cards["om_1"])

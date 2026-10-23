@@ -123,3 +123,78 @@ def test_geolocate_gives_up_when_every_provider_fails(monkeypatch):
 
     monkeypatch.setattr(weather, "_get_json", always_fails)
     assert weather.geolocate() is None
+
+
+# ------------------------------------------- the room the AC is actually in
+# Design Q2c (2026-10-23): the table says what the *outdoors* suggests; that
+# target is then checked against the DHT11 reading. A target the room already
+# meets is "不用开"; one that came out on the wrong side of the room -- the
+# reported "外面 16℃, 建议制热 20℃" in a 23℃ room, i.e. heat it *colder* -- is
+# moved to the near side instead of being handed over as-is.
+
+
+def test_the_room_is_named_when_it_is_known():
+    rec = recommend(36, 0, room_c=30)
+    assert "室温 30℃" in rec.note
+    assert rec.temp == 26            # a real gap to close: the table stands
+    assert rec.skip is False
+
+
+def test_a_target_the_room_already_meets_is_not_worth_running():
+    # 室外 16℃ → 表值制热 20℃；室温 21℃ → 开了也不制热。
+    rec = recommend(16, 0, room_c=21)
+    assert rec.skip is True
+    assert "不用开" in rec.note
+
+
+def test_a_heat_target_below_the_room_is_lifted_to_the_near_side():
+    # 用户报的那一张：室外 16℃、室温 23℃，「建议制热 20℃」比房间还冷。
+    rec = recommend(16, 0, room_c=23)
+    assert rec.mode == HEAT
+    assert rec.temp == 25            # 室温 + 2，这回是真的要把它加热
+    assert "室温 23℃" in rec.note
+    assert rec.skip is False
+
+
+def test_a_cool_target_above_the_room_is_pulled_to_the_near_side():
+    # 室外 27℃ → 表值制冷 24℃；室温 22℃ → 那台空调不会制冷。
+    rec = recommend(27, 0, room_c=22)
+    assert rec.mode == COOL
+    assert rec.temp == 20            # 室温 - 2
+
+
+def test_the_room_fix_respects_the_legal_range():
+    assert recommend(16, 0, room_c=30).temp == 30       # 30+2 clamps to the max
+    assert recommend(36, 0, room_c=16).temp == 16       # 16-2 clamps to the min
+
+
+def test_without_a_room_reading_the_table_is_untouched():
+    assert recommend(16).note == "外面 16℃，建议制热 20℃"
+    assert recommend(16).skip is False
+
+
+def test_the_two_hour_trend_starts_at_the_current_hour():
+    """The hourly series starts at 00:00, so entries 0 and 2 are last night.
+
+    Reading those made the cold-snap nudge a statement about 00:00→02:00 --
+    something that has already happened -- instead of about the next two hours
+    (design Q2b, fixed 2026-10-23).
+    """
+    payload = {
+        "current": {"temperature_2m": 30.0, "time": "2026-10-23T15:00"},
+        "hourly": {
+            "time": ["2026-10-23T13:00", "2026-10-23T14:00",
+                     "2026-10-23T15:00", "2026-10-23T16:00",
+                     "2026-10-23T17:00"],
+            "temperature_2m": [10.0, 11.0, 30.0, 29.0, 28.0],
+        },
+    }
+    now = parse_open_meteo(payload)
+    assert now.next2h_delta_c == -2      # 15:00 → 17:00, not 13:00 → 15:00
+
+
+def test_the_two_hour_trend_is_dropped_when_the_series_stops_at_now():
+    payload = {"current": {"temperature_2m": 30.0, "time": "2026-10-23T23:00"},
+               "hourly": {"time": ["2026-10-23T23:00"],
+                          "temperature_2m": [30.0]}}
+    assert parse_open_meteo(payload).next2h_delta_c == 0

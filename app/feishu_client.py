@@ -59,13 +59,20 @@ class FeishuClient:
     def __init__(self, *, app_id: str, app_secret: str,
                  on_action: Optional[ActionHandler] = None,
                  on_text: Optional[TextHandler] = None,
-                 log_level: str = "INFO") -> None:
+                 log_level: str = "INFO", timeout_s: float = 5.0) -> None:
         self._app_id = app_id
         self._app_secret = app_secret
         self.on_action = on_action
         self.on_text = on_text
         self._log_level = log_level
-        self._api = lark.Client.builder().app_id(app_id).app_secret(app_secret).build()
+        #: Seconds per OpenAPI call. The SDK's own default is 30, and `_call`
+        #: retries once -- a minute of a thread per failed card update, which is
+        #: how a dead internet kept the heartbeat from going out (design 18.15).
+        self._timeout_s = timeout_s
+        self._api = (lark.Client.builder()
+                     .app_id(app_id).app_secret(app_secret)
+                     .timeout(timeout_s)
+                     .build())
         self._thread: Optional[threading.Thread] = None
 
     #: Tries per OpenAPI call. Spec §10 asks for one retry; the second attempt

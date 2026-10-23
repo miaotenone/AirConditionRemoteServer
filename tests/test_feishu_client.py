@@ -244,3 +244,20 @@ def test_a_success_without_a_body_reports_no_message_id():
     client._api.im.v1.message.create = lambda request: types.SimpleNamespace(
         success=lambda: True, code=0, msg="ok", data=None)
     assert client.send_card("oc_1", {"a": 1}) is None
+
+
+# ------------------------------------------------------------------ timeouts
+# Design 18.15: the SDK defaults to 30 s per call, and every call here retries
+# once -- so an unreachable Feishu could hold a thread for a minute. That is the
+# thread the card patch runs on, and (before 18.15) the one that also owes the
+# device its heartbeat. Seconds, not minutes.
+
+
+def test_the_openapi_client_times_out_in_seconds():
+    client = FeishuClient(app_id="cli_test", app_secret="secret")
+    assert client._api.config.timeout == 5.0
+
+
+def test_the_configured_timeout_reaches_the_sdk():
+    client = FeishuClient(app_id="cli_test", app_secret="secret", timeout_s=2.5)
+    assert client._api.config.timeout == 2.5

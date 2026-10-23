@@ -136,6 +136,16 @@ _MQTT_NOTICE_S = 120.0
 #: leave first.
 CALLBACK_SETTLE_S = 0.2
 
+#: How long the renderer waits after a failed card patch before trying the same
+#: content again (design 18.15).
+#:
+#: A failed patch leaves the card "not yet rendered", so a retry on the next
+#: tick is always going to happen -- that is the point. What must not happen is
+#: a retry *every second* for as long as Feishu is unreachable: one dead
+#: internet turned into an unbounded stream of 30 s calls, and they were all
+#: coming out of the thread that owes the device its heartbeat.
+_RENDER_BACKOFF_S = 60.0
+
 
 def _is_card_command(text: str) -> bool:
     """True when `text` is the summon word, tolerating stray punctuation.
@@ -170,6 +180,9 @@ class Service:
         self._state_at = 0.0        # wall clock of the last ac/state
         self._confirm_deadline = 0.0
         self._rendered: dict[str, str] = {}
+        self._render_retry_at = 0.0     # when a failed patch may be retried
+        self._render_wanted = threading.Event()     # "card may be out of date"
+        self._weather_pushing = False   # a daily push is out on its own thread
         self._loop = LoopState()    # the night loop's memory
         self._last_env_record = 0.0
         self._last_hb = 0.0
@@ -199,6 +212,7 @@ class Service:
             on_action=self._on_card_action,
             on_text=self._on_text_message,
             log_level=settings.feishu_log_level,
+            timeout_s=settings.feishu_timeout_s,
         )
 
     # ------------------------------------------------------------------ startup
@@ -208,11 +222,14 @@ class Service:
         self.feishu.start()
         threading.Thread(target=self._publish_worker, name="publisher", daemon=True).start()
         threading.Thread(target=self._tick, name="ticker", daemon=True).start()
+        threading.Thread(target=self._renderer_worker, name="renderer",
+                         daemon=True).start()
         log.info("service up (owner=%s, prefix=%s)", self.settings.owner_open_id,
                  self.settings.mqtt_prefix)
 
     def stop(self) -> None:
         self._stop.set()
+        self._render_wanted.set()   # let the renderer see `_stop` and leave
         self.mqtt.stop()
         self.store.close()
 
@@ -763,12 +780,28 @@ class Service:
     #: (WeatherNow, Recommendation) from the last fetch, for the "忽略" patch.
     _last_weather: tuple = (None, None)
 
+    def _room_temp(self) -> int | None:
+        """The latest DHT11 temperature, or None when there is none to trust.
+
+        Same freshness rule as the history recorder: a reading older than ten
+        minutes is the past, not the room (design §9.1). Without one the
+        suggestion falls back to the outdoor table alone.
+        """
+        with self._lock:
+            reading, at = self.env, self.env_at
+        if reading is None or not reading.ok or not at:
+            return None
+        if time.time() - at > 600:
+            return None
+        return reading.temp
+
     def _weather_snapshot(self) -> tuple:
         """Fetch and judge the weather once. ``(None, None)`` when it fails."""
         now = fetch_now(lat=self.settings.weather_lat, lon=self.settings.weather_lon)
         if now is None:
             return (None, None)
-        return (now, recommend(now.outdoor_c, now.next2h_delta_c))
+        return (now, recommend(now.outdoor_c, now.next2h_delta_c,
+                               room_c=self._room_temp()))
 
     def _execute_weather(self, chat_id: str, message_id: str) -> None:
         now, recommendation = self._last_weather
@@ -777,6 +810,15 @@ class Service:
         if now is None or recommendation is None:
             self._show_card(CARD_WEATHER, chat_id,
                             build_weather_card(None, None, status="天气没拿到"),
+                            prefer=message_id)
+            return
+        if recommendation.skip:
+            # The room is already where the table would put it, so the command
+            # would set a target the AC then ignores (design Q2c). Say so rather
+            # than sending something that looks like it did work.
+            self._show_card(CARD_WEATHER, chat_id,
+                            build_weather_card(now, recommendation,
+                                               status="✅ 室温已合适，不用开"),
                             prefer=message_id)
             return
         actions: list[tuple[str, int]] = [("mode", recommendation.mode)]
@@ -864,15 +906,19 @@ class Service:
     def _tick(self) -> None:
         """One second of housekeeping: timers, history, heartbeat, night loop."""
         while not self._stop.wait(1.0):
-            now = time.time()
-            self._expire_pending()
-            self._record_env(now)
-            self._heartbeat(now)
-            self._mqtt_step(now)
-            self._run_due_schedules(now)
-            self._maybe_push_weather(now)
-            self._night_step(now)
-            self._render()          # no-op unless something actually changed
+            self._tick_once()
+
+    def _tick_once(self) -> None:
+        """A single pass of the tick; the loop above is the only real caller."""
+        now = time.time()
+        self._expire_pending()
+        self._record_env(now)
+        self._heartbeat(now)
+        self._mqtt_step(now)
+        self._run_due_schedules(now)
+        self._maybe_push_weather(now)
+        self._night_step(now)
+        self._request_render()      # the patch itself is the renderer's job
 
     def _expire_pending(self) -> None:
         changed = False
@@ -979,7 +1025,10 @@ class Service:
         self._queue_actions(preset_actions(preset))
         chat_id = self._chat_id()
         if chat_id:
-            self.feishu.send_text(chat_id, f"⏰ 已按预约执行「{preset.name}」")
+            # The receipt is a Feishu round trip; the tick must not wait on it
+            # either (design 18.15) -- same hand-off as `_notify_owner`.
+            self._run_async(self.feishu.send_text, chat_id,
+                            f"⏰ 已按预约执行「{preset.name}」")
 
     def _maybe_push_weather(self, now: float) -> None:
         """Push the daily suggestion, retrying a failed fetch (design §9.3).
@@ -988,6 +1037,9 @@ class Service:
         fetch no longer costs the whole evening's card (design 18.12 #3). Tries
         are spaced out, and none happen more than `_WEATHER_CATCHUP_S` after the
         configured time -- "today's suggestion" at midnight helps nobody.
+
+        Both the fetch and the card are network round trips, so they happen off
+        the tick (design 18.15); this method only decides whether to start one.
         """
         at = at_today(self._push_time(), datetime.now())
         if at is None or now < at:
@@ -998,16 +1050,28 @@ class Service:
             return                          # too late to be worth sending
         if now < self._weather_retry_at:
             return                          # backing off after a failed try
+        if self._weather_pushing:
+            return                          # the last try is still out there
 
         chat_id = self._chat_id()
-        if chat_id and self._push_weather(chat_id):
-            log.info("pushed the daily weather suggestion")
-            self.store.set_setting(S_WEATHER_PUSHED_AT, str(now))
-            self._weather_retry_at = 0.0
-            return
         if not chat_id:
             log.info("weather push skipped: no chat to send to yet")
-        self._weather_retry_at = now + _WEATHER_RETRY_S
+            self._weather_retry_at = now + _WEATHER_RETRY_S
+            return
+        self._weather_pushing = True
+        self._run_async(self._push_weather_blocking, now, chat_id)
+
+    def _push_weather_blocking(self, now: float, chat_id: str) -> None:
+        """The daily push itself: the fetch, the card, and the bookkeeping."""
+        try:
+            if self._push_weather(chat_id):
+                log.info("pushed the daily weather suggestion")
+                self.store.set_setting(S_WEATHER_PUSHED_AT, str(now))
+                self._weather_retry_at = 0.0
+                return
+            self._weather_retry_at = now + _WEATHER_RETRY_S
+        finally:
+            self._weather_pushing = False
 
     def _night_step(self, now: float) -> None:
         """One pass of the night closed loop (design §7.3)."""
@@ -1096,20 +1160,74 @@ class Service:
             return "--:--:--"
         return datetime.fromtimestamp(self._state_at).strftime("%H:%M:%S")
 
-    def _render(self) -> None:
-        """Patch the remote card, but only when its content actually changed."""
+    def _render(self) -> bool:
+        """Patch the remote card, but only when its content actually changed.
+
+        Returns True when the card is up to date afterwards -- either because it
+        already was or because the patch landed -- and False when the patch
+        failed, which is what `_render_if_due` spaces its retries on.
+
+        Kept synchronous for the paths where the repaint *is* the answer to
+        something the user just did (a click, a text command) and for the MQTT
+        callbacks, which already run off the paho thread. The tick uses
+        `_request_render` instead: it must never wait on Feishu (design 18.15).
+        """
         with self._lock:
             card = self._card()
             serialised = json.dumps(card, sort_keys=True)
             if serialised == self._rendered.get(CARD_REMOTE):
-                return
+                return True
             message_id = self.store.get_card(self.settings.owner_open_id, CARD_REMOTE)
 
         if not message_id:
-            return              # nothing posted yet; the next "设置卡片" creates it
+            return True         # nothing posted yet; the next "设置卡片" creates it
         if self.feishu.patch_card(message_id, card):
             with self._lock:
                 self._rendered[CARD_REMOTE] = serialised
+            return True
+        return False
+
+    def _request_render(self) -> None:
+        """Ask the renderer thread to bring the card up to date. Never blocks.
+
+        The tick calls this rather than patching the card itself (design 18.15):
+        the patch is a Feishu round trip, and the thread that would wait on it
+        also owes the device its heartbeat. Five minutes without one and the
+        gateway concludes the service is dead and switches the AC off -- so
+        "internet down, LAN fine" could switch the AC off.
+        """
+        self._render_wanted.set()
+
+    def _renderer_worker(self) -> None:
+        """Patch the card off the tick thread: on request, or when a backoff ends.
+
+        The one-second timeout is what lets `_RENDER_BACKOFF_S` expire without
+        waiting for something else to change on screen.
+        """
+        while not self._stop.is_set():
+            self._render_wanted.wait(1.0)
+            self._render_wanted.clear()
+            if self._stop.is_set():
+                return
+            self._render_if_due()
+
+    def _render_if_due(self) -> None:
+        """One patch attempt, spaced out after a failure (design 18.15).
+
+        A failed patch used to be retried on the very next tick, forever: one
+        unreachable Feishu meant one 30 s call per second, with the heartbeat
+        queued behind them. The card is still eventually consistent -- the
+        renderer is woken again by the next change, and the backoff lapses.
+        """
+        with self._lock:
+            if time.monotonic() < self._render_retry_at:
+                return
+        if self._render():
+            return
+        with self._lock:
+            self._render_retry_at = time.monotonic() + _RENDER_BACKOFF_S
+        log.warning("card patch failed; the next attempt is %.0fs away",
+                    _RENDER_BACKOFF_S)
 
     def _ensure_card(self, chat_id: str) -> None:
         """Post the remote once, so a text-only user still has something to fix.
