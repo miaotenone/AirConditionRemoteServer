@@ -822,7 +822,13 @@ class Service:
                                                status="✅ 室温已合适，不用开"),
                             prefer=message_id)
             return
-        actions: list[tuple[str, int]] = [("mode", recommendation.mode)]
+        # "立即执行" means "run this now", so it switches the AC on as well: the
+        # suggestion is a target to hold, not a knob to pre-set. Without power
+        # the device applied heat/26, sent the IR frame, and the AC stayed off
+        # (seen on hardware 2026-10-23). Canonical field order: power, mode,
+        # temp (design 5.2/6.4).
+        actions: list[tuple[str, int]] = [("power", 1),
+                                         ("mode", recommendation.mode)]
         if recommendation.temp_used:
             actions.append(("temp", recommendation.temp))
         self._queue_actions(actions)

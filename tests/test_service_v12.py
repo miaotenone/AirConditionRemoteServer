@@ -524,6 +524,19 @@ def test_the_weather_exec_button_sends_the_suggestion(tmp_path):
     assert "已按建议执行" in visible_text(service.feishu.cards["om_1"])
 
 
+def test_the_weather_exec_button_turns_the_ac_on_too(tmp_path):
+    # 「立即执行」的人话意思就是「现在照这个跑」。只发 mode+temp 的话，空调
+    # 关着时点它，设备照做、红外也发了，空调**还是关着**（2026-10-23 真机所见：
+    # 帧里 power=00）。天气卡的建议本身也假定要开机，所以补 power，且按预设
+    # 的规范字段序放最前。
+    service = build_service(tmp_path)
+    service._last_weather = (WeatherNow(36, 50, -1), recommend(36))
+    service._on_card_action("ou_test", "oc_1", "om_1",
+                            {"a": "weather_exec", "v": 0}, None)
+    assert _queued(service) == [("power", 1), ("mode", AC_MODE["cool"]),
+                                ("temp", 26)]
+
+
 def test_an_ac_button_still_works_through_the_same_callback(tmp_path):
     service = build_service(tmp_path)
     service._on_card_action("ou_test", "oc_1", "om_1", {"a": "power", "v": 1}, None)
