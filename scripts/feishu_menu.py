@@ -31,6 +31,7 @@ parser understands -- see docs/feishu-setup.md section 13, the source of truth.
     python scripts/feishu_menu.py --show     # dump the live menu as JSON
     python scripts/feishu_menu.py --apply    # actually write it
 """
+
 import argparse
 import json
 import os
@@ -139,9 +140,7 @@ def flatten_read(live):
     out = {}
     for n in live:
         if n.get("parent_menu_id"):
-            out.setdefault(names.get(n.get("parent_menu_id")), []).append(
-                n.get("default_name")
-            )
+            out.setdefault(names.get(n.get("parent_menu_id")), []).append(n.get("default_name"))
     return out
 
 
@@ -151,17 +150,16 @@ def nested_menu():
         {
             "default_name": group,
             "menu_content_type": CT_CONTAINER,
-            "children": [
-                {"default_name": item, "menu_content_type": CT_TEXT} for item in items
-            ],
+            "children": [{"default_name": item, "menu_content_type": CT_TEXT} for item in items],
         }
         for group, items in MENU
     ]
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--apply", action="store_true", help="write the menu (default: dry run)")
     ap.add_argument("--show", action="store_true", help="dump the live menu and exit")
     args = ap.parse_args()
@@ -171,10 +169,12 @@ def main():
 
     groups = len({n.get("parent_menu_id") for n in live if n.get("parent_menu_id")})
     items = sum(1 for n in live if n.get("parent_menu_id"))
-    print(f"live menu: version {version}, {groups} groups / {items} items "
-          f"({len(live)} nodes), enable={bot.get('bot_menu_enable')}, "
-          f"strategy={bot.get('bot_menu_display_strategy')}, "
-          f"online_version_id={app.get('online_version_id')}")
+    print(
+        f"live menu: version {version}, {groups} groups / {items} items "
+        f"({len(live)} nodes), enable={bot.get('bot_menu_enable')}, "
+        f"strategy={bot.get('bot_menu_display_strategy')}, "
+        f"online_version_id={app.get('online_version_id')}"
+    )
 
     if args.show:
         print(json.dumps(live, ensure_ascii=False, indent=2))
@@ -232,11 +232,15 @@ def main():
     i2 = sum(1 for n in live2 if n.get("parent_menu_id"))
     print(f"read back: version {version2}, {g2} groups / {i2} items ({len(live2)} nodes)")
     if app2.get("online_version_id") != app.get("online_version_id"):
-        print(f"online version changed: {app.get('online_version_id')} -> "
-              f"{app2.get('online_version_id')}  (it is live)")
+        print(
+            f"online version changed: {app.get('online_version_id')} -> "
+            f"{app2.get('online_version_id')}  (it is live)"
+        )
     else:
-        print("online version unchanged -- the write landed in a draft, "
-              "which must be published before the client shows it.")
+        print(
+            "online version unchanged -- the write landed in a draft, "
+            "which must be published before the client shows it."
+        )
     return 0
 
 

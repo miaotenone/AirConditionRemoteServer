@@ -17,8 +17,7 @@ from .env import WINDOWS
 from .state import ALLOWED_ACTIONS, TEMP_MAX, TEMP_MIN
 
 #: UI actions that carry no id -- they just open something (design 18.2).
-UI_PLAIN_ACTIONS = ("preset_open", "preset_new", "settings_open",
-                    "weather_exec", "weather_ignore")
+UI_PLAIN_ACTIONS = ("preset_open", "preset_new", "settings_open", "weather_exec", "weather_ignore")
 #: UI actions whose `v` is a preset id.
 UI_ID_ACTIONS = ("preset_edit", "preset_delete", "preset_apply")
 #: UI actions whose `v` is the requested on/off state.
@@ -45,8 +44,7 @@ class UIAction:
     window: str = ""
 
 
-def normalize_ui_action(*, value: Any = None,
-                        form_value: Any = None) -> Optional[UIAction]:
+def normalize_ui_action(*, value: Any = None, form_value: Any = None) -> Optional[UIAction]:
     """Return the UI action a card click asked for, or ``None``.
 
     ``preset_save`` / ``settings_save`` arrive on a ``form_submit`` button and
@@ -66,7 +64,7 @@ def normalize_ui_action(*, value: Any = None,
     if action in UI_WINDOW_ACTIONS:
         window = value.get("v")
         if not isinstance(window, str) or window not in WINDOWS:
-            return None      # an unknown window is ignored, never guessed at
+            return None  # an unknown window is ignored, never guessed at
         return UIAction(kind=action, window=window)
 
     if action in UI_BUTTON_ACTIONS:

@@ -69,7 +69,9 @@ def test_card_declares_schema_two():
 
 
 def test_card_is_json_serialisable():
-    card = build_card(AcState(temp=26), Presence(online=True, last_state_at=1.0), updated_at="12:00:00")
+    card = build_card(
+        AcState(temp=26), Presence(online=True, last_state_at=1.0), updated_at="12:00:00"
+    )
     json.dumps(card)  # must not raise
 
 
@@ -77,8 +79,9 @@ def test_card_is_json_serialisable():
 
 
 def test_status_line_reports_every_field():
-    card = build_card(AcState(power=1, mode=AC_MODE["cool"], temp=24, fan=AC_FAN["medium"]),
-                      Presence(online=True))
+    card = build_card(
+        AcState(power=1, mode=AC_MODE["cool"], temp=24, fan=AC_FAN["medium"]), Presence(online=True)
+    )
     line = markdown(card)
     assert "开机" in line
     assert "制冷" in line
@@ -103,8 +106,10 @@ def test_updated_at_is_rendered():
 
 
 def test_header_theme_reflects_presence():
-    assert build_card(AcState(), Presence(online=True))["header"]["template"] != \
-           build_card(AcState(), Presence(online=False))["header"]["template"]
+    assert (
+        build_card(AcState(), Presence(online=True))["header"]["template"]
+        != build_card(AcState(), Presence(online=False))["header"]["template"]
+    )
 
 
 # ------------------------------------------------------------- pending / stale
@@ -134,11 +139,15 @@ def test_power_group_offers_on_and_off():
 
 
 def test_mode_group_covers_every_mode():
-    assert button_values(build_card(AcState(), Presence(online=True)), "mode") == set(AC_MODE.values())
+    assert button_values(build_card(AcState(), Presence(online=True)), "mode") == set(
+        AC_MODE.values()
+    )
 
 
 def test_fan_group_covers_every_speed():
-    assert button_values(build_card(AcState(), Presence(online=True)), "fan") == set(AC_FAN.values())
+    assert button_values(build_card(AcState(), Presence(online=True)), "fan") == set(
+        AC_FAN.values()
+    )
 
 
 def test_temperature_group_is_minus_and_plus():
@@ -275,15 +284,16 @@ def test_every_form_submit_button_carries_the_card_2_0_submit_attribute():
 def test_the_preset_form_prefills_an_existing_preset():
     from app.preset import Preset
 
-    values = {e["name"]: e.get("default_value")
-              for e in elements(build_preset_form(Preset(id=1, name="夏天", temp=26)))
-              if e.get("tag") == "input"}
+    values = {
+        e["name"]: e.get("default_value")
+        for e in elements(build_preset_form(Preset(id=1, name="夏天", temp=26)))
+        if e.get("tag") == "input"
+    }
     assert values["name"] == "夏天"
 
 
 def test_the_settings_card_collects_push_time_and_the_night_window():
-    card = build_settings_card({"push_time": "17:00", "night_target": "26"},
-                               night_enabled=True)
+    card = build_settings_card({"push_time": "17:00", "night_target": "26"}, night_enabled=True)
     names = {e.get("name") for e in elements(card) if e.get("tag") == "form"}
     # the form is itself an element with a name
     assert "settings_form" in names
@@ -310,8 +320,9 @@ def test_the_weather_card_carries_the_recommendation_and_two_buttons():
 def test_the_history_card_renders_a_summary():
     from app.env import EnvSample, aggregate
 
-    summary = aggregate([EnvSample(1.0, 26, 50)],
-                        now=dt.datetime(2026, 10, 15, 12, 0), window="current")
+    summary = aggregate(
+        [EnvSample(1.0, 26, 50)], now=dt.datetime(2026, 10, 15, 12, 0), window="current"
+    )
     assert "26℃" in markdown(build_history_card(summary))
 
 
@@ -320,11 +331,13 @@ def test_the_new_cards_are_all_json_serialisable():
     from app.preset import Preset
     from app.weather import WeatherNow, recommend
 
-    for card in (build_preset_card([Preset(id=1, name="夏天")]),
-                 build_preset_form(),
-                 build_settings_card({}, night_enabled=False),
-                 build_weather_card(WeatherNow(outdoor_c=30), recommend(30)),
-                 build_history_card(Summary(window="all"))):
+    for card in (
+        build_preset_card([Preset(id=1, name="夏天")]),
+        build_preset_form(),
+        build_settings_card({}, night_enabled=False),
+        build_weather_card(WeatherNow(outdoor_c=30), recommend(30)),
+        build_history_card(Summary(window="all")),
+    ):
         json.dumps(card)
 
 
@@ -337,8 +350,9 @@ def _points(count=3, *, start=dt.datetime(2026, 10, 15, 9, 0), step=300):
     from app.env import ChartPoint
 
     return tuple(
-        ChartPoint(at=(start + dt.timedelta(seconds=step * i)).timestamp(),
-                   temp=25 + i, humidity=50 + i)
+        ChartPoint(
+            at=(start + dt.timedelta(seconds=step * i)).timestamp(), temp=25 + i, humidity=50 + i
+        )
         for i in range(count)
     )
 
@@ -368,29 +382,27 @@ def test_a_history_card_carries_the_five_windows():
     from app.env import Summary
 
     card = build_history_card(Summary(window="day", count=3), points=_points(3))
-    assert button_values(card, "history_switch") == \
-        {"current", "tonight", "day", "week", "all"}
+    assert button_values(card, "history_switch") == {"current", "tonight", "day", "week", "all"}
 
 
 def test_the_window_the_user_asked_for_is_the_highlighted_button():
     from app.env import Summary
 
     card = build_history_card(Summary(window="week", count=3), points=_points(3))
-    active = [b["text"]["content"] for b in buttons(card, "history_switch")
-              if b["type"] == "primary"]
+    active = [
+        b["text"]["content"] for b in buttons(card, "history_switch") if b["type"] == "primary"
+    ]
     assert active == ["一周"]
 
 
 def test_the_target_is_drawn_against_the_room_temperature():
     from app.env import Summary
 
-    card = build_history_card(Summary(window="day", count=3), points=_points(3),
-                              target=26)
+    card = build_history_card(Summary(window="day", count=3), points=_points(3), target=26)
     spec = charts(card)[0]["chart_spec"]
     assert spec["seriesField"] == "metric"
     assert {v["metric"] for v in spec["data"]["values"]} == {"室温", "目标"}
-    assert [v["value"] for v in spec["data"]["values"] if v["metric"] == "目标"] \
-        == [26, 26, 26]
+    assert [v["value"] for v in spec["data"]["values"] if v["metric"] == "目标"] == [26, 26, 26]
 
 
 def test_a_day_chart_labels_the_axis_with_the_clock_only():
@@ -404,8 +416,7 @@ def test_a_day_chart_labels_the_axis_with_the_clock_only():
 def test_a_long_window_labels_the_axis_with_the_date_too():
     from app.env import Summary
 
-    card = build_history_card(Summary(window="week", count=48),
-                              points=_points(48, step=3 * 3600))
+    card = build_history_card(Summary(window="week", count=48), points=_points(48, step=3 * 3600))
     labels = [v["time"] for v in charts(card)[0]["chart_spec"]["data"]["values"]]
     assert labels[0] == "10-15 09:00"
 
@@ -420,6 +431,7 @@ def test_a_history_card_stays_well_under_the_message_cap():
     """
     from app.env import CHART_POINTS, Summary
 
-    card = build_history_card(Summary(window="week", count=2016), target=26,
-                              points=_points(CHART_POINTS, step=3 * 3600))
+    card = build_history_card(
+        Summary(window="week", count=2016), target=26, points=_points(CHART_POINTS, step=3 * 3600)
+    )
     assert len(json.dumps(card, ensure_ascii=False).encode("utf-8")) < 16 * 1024

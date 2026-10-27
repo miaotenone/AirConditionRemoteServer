@@ -59,8 +59,7 @@ def test_the_help_prints_every_example():
 
 
 def test_the_help_covers_every_group_the_grammar_has():
-    for label in ("开关", "模式", "温度", "风速", "查询",
-                  "历史", "夜间", "天气", "预设"):
+    for label in ("开关", "模式", "温度", "风速", "查询", "历史", "夜间", "天气", "预设"):
         assert label in HELP_TEXT, label
 
 

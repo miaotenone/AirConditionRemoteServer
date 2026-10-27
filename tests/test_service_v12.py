@@ -14,7 +14,7 @@ import pytest
 from app.cards import SETTINGS_TITLE
 from app.config import Settings
 from app.env import EnvReading
-from app.main import Service, _MQTT_NOTICE_S, _WEATHER_CATCHUP_S, _WEATHER_RETRY_S
+from app.main import _MQTT_NOTICE_S, _WEATHER_CATCHUP_S, _WEATHER_RETRY_S, Service
 from app.preset import Preset
 from app.state import AC_FAN, AC_MODE, AcState, Presence
 from app.weather import WeatherNow, recommend
@@ -57,8 +57,12 @@ class FakeFeishu:
 
 
 def build_service(tmp_path, **overrides):
-    values = {"feishu_app_id": "cli_test", "feishu_app_secret": "secret",
-              "owner_open_id": "ou_test", "db_path": str(tmp_path / "t.sqlite3")}
+    values = {
+        "feishu_app_id": "cli_test",
+        "feishu_app_secret": "secret",
+        "owner_open_id": "ou_test",
+        "db_path": str(tmp_path / "t.sqlite3"),
+    }
     values.update(overrides)
     service = Service(Settings(_env_file=None, **values))
     service.feishu = FakeFeishu()
@@ -91,6 +95,7 @@ def visible_text(card):
 
 # ------------------------------------------------------------------ ac/env
 
+
 def test_a_retained_env_replay_is_ignored(tmp_path):
     # 设计 18.6：重启后 broker 会重放 retained，那不是「刚测到」，不能采信。
     service = build_service(tmp_path)
@@ -122,6 +127,7 @@ def test_a_good_read_is_recorded_after_the_interval(tmp_path):
 
 
 # --------------------------------------------------------------- text branches
+
 
 def test_history_says_so_when_nothing_has_been_recorded(tmp_path):
     service = build_service(tmp_path)
@@ -159,7 +165,7 @@ def test_a_status_query_does_not_flip_the_night_switch(tmp_path):
     service = build_service(tmp_path)
     service._on_text_message("ou_test", "oc_1", "om_1", "夜间状态")
     assert service._night_enabled() is False
-    assert service.feishu.sent == []          # nothing was posted either
+    assert service.feishu.sent == []  # nothing was posted either
 
 
 def test_the_night_menu_entry_opens_the_settings_card(tmp_path):
@@ -193,12 +199,11 @@ def test_a_history_query_answers_with_a_chart_below_the_text(tmp_path):
     service = build_service(tmp_path)
     _seed_history(service)
     service._on_text_message("ou_test", "oc_1", "om_1", "一周")
-    assert "室温" in service.feishu.replies[0][1]        # the text reply is unchanged
+    assert "室温" in service.feishu.replies[0][1]  # the text reply is unchanged
 
     card_id = service.store.get_card("ou_test", "history")
     assert card_id
-    drawn = [e for e in service.feishu.cards[card_id]["body"]["elements"]
-             if e["tag"] == "chart"]
+    drawn = [e for e in service.feishu.cards[card_id]["body"]["elements"] if e["tag"] == "chart"]
     assert len(drawn) == 2
 
 
@@ -217,10 +222,9 @@ def test_a_history_window_button_repaints_that_card_in_place(tmp_path):
     card_id = service.store.get_card("ou_test", "history")
     assert service.feishu.patched == []
 
-    service._on_card_action("ou_test", "oc_1", card_id,
-                            {"a": "history_switch", "v": "week"}, None)
+    service._on_card_action("ou_test", "oc_1", card_id, {"a": "history_switch", "v": "week"}, None)
     assert service.feishu.patched == [card_id]
-    assert service.feishu.sent == ["oc_1"]               # not re-posted below
+    assert service.feishu.sent == ["oc_1"]  # not re-posted below
 
 
 def test_a_window_button_answers_even_when_that_window_has_no_shape(tmp_path):
@@ -231,8 +235,9 @@ def test_a_window_button_answers_even_when_that_window_has_no_shape(tmp_path):
     card_id = service.store.get_card("ou_test", "history")
     assert card_id
 
-    service._on_card_action("ou_test", "oc_1", card_id,
-                            {"a": "history_switch", "v": "current"}, None)
+    service._on_card_action(
+        "ou_test", "oc_1", card_id, {"a": "history_switch", "v": "current"}, None
+    )
     assert service.feishu.patched == [card_id]
     repainted = service.feishu.cards[card_id]
     assert not [e for e in repainted["body"]["elements"] if e["tag"] == "chart"]
@@ -242,6 +247,7 @@ def test_a_window_button_answers_even_when_that_window_has_no_shape(tmp_path):
 # 2026-10-15: 点菜单「预设」时服务端把老卡「原地 patch」。卡在聊天上方，用户站在
 # 最下面，回执却写着「预设卡片 👇」——看起来就是「什么都没发生」。菜单入口一律
 # 重新发一张到最新位置（跟 D22 召唤遥控卡同一套动作）。
+
 
 def test_a_preset_menu_tap_posts_a_fresh_card_at_the_bottom(tmp_path):
     service = build_service(tmp_path)
@@ -270,7 +276,7 @@ def test_a_menu_tap_leaves_a_notice_when_the_old_card_cannot_be_recalled(tmp_pat
     service = build_service(tmp_path)
     service._on_text_message("ou_test", "oc_1", "om_1", "夜间")
     first = service.store.get_card("ou_test", "settings")
-    service.feishu.recall_succeeds = False            # 超过撤回窗口
+    service.feishu.recall_succeeds = False  # 超过撤回窗口
 
     service._on_text_message("ou_test", "oc_1", "om_2", "夜间")
     assert first in service.feishu.patched
@@ -296,8 +302,7 @@ def test_a_card_button_still_answers_in_place(tmp_path):
     card_id = service.store.get_card("ou_test", "preset")
     sent_before = len(service.feishu.sent)
 
-    service._on_card_action("ou_test", "oc_1", card_id,
-                            {"a": "preset_new", "v": 0}, None)
+    service._on_card_action("ou_test", "oc_1", card_id, {"a": "preset_new", "v": 0}, None)
     assert card_id in service.feishu.patched
     assert len(service.feishu.sent) == sent_before, "没有多发消息"
 
@@ -311,15 +316,13 @@ def test_a_clicks_card_work_waits_for_the_callback_response(tmp_path):
     返回时还没有任何飞书调用发生。
     """
     service = build_service(tmp_path)
-    service._run_after_callback = Service._run_after_callback.__get__(
-        service, Service)
+    service._run_after_callback = Service._run_after_callback.__get__(service, Service)
     service._on_text_message("ou_test", "oc_1", "om_1", "预设")
     card_id = service.store.get_card("ou_test", "preset")
     service.feishu.patched.clear()
 
     started = time.monotonic()
-    service._on_card_action("ou_test", "oc_1", card_id,
-                            {"a": "preset_new", "v": 0}, None)
+    service._on_card_action("ou_test", "oc_1", card_id, {"a": "preset_new", "v": 0}, None)
     elapsed = time.monotonic() - started
     assert elapsed < 0.1, f"回调被堵了 {elapsed:.2f}s"
     assert service.feishu.patched == [], "回调还没返回就去动卡片了"
@@ -335,13 +338,11 @@ def test_a_clicks_card_work_waits_for_the_callback_response(tmp_path):
 def test_an_ac_buttons_card_update_waits_too(tmp_path):
     """遥控卡按钮的乐观更新也走同一条路：先回执，再 patch。"""
     service = build_service(tmp_path)
-    service._run_after_callback = Service._run_after_callback.__get__(
-        service, Service)
+    service._run_after_callback = Service._run_after_callback.__get__(service, Service)
     service.store.set_message_id("ou_test", "om_remote")
     service.feishu.patched.clear()
 
-    service._on_card_action("ou_test", "oc_1", "om_remote",
-                            {"a": "power", "v": 1}, None)
+    service._on_card_action("ou_test", "oc_1", "om_remote", {"a": "power", "v": 1}, None)
     assert service.view.power == 1, "状态还是立刻生效的"
     assert service.feishu.patched == [], "回调还没返回就去动卡片了"
 
@@ -415,7 +416,7 @@ def test_a_future_timer_books_a_single_run(tmp_path):
     preset = _preset(name="睡觉", timer_enabled=True, timer_at=_soon())
     service.store.save_preset(preset)
     service._on_text_message("ou_test", "oc_1", "om_1", "用睡觉")
-    assert service._actions.empty()                 # nothing runs now ...
+    assert service._actions.empty()  # nothing runs now ...
     (job,) = service.store.list_schedules()
     assert job.payload["preset_id"] == service.store.get_preset_by_name("睡觉").id
     assert "已预约" in service.feishu.replies[0][1]
@@ -430,12 +431,13 @@ def test_a_past_timer_runs_now(tmp_path):
 
 # --------------------------------------------------------------- card kinds
 
+
 def test_each_card_kind_owns_its_own_message(tmp_path):
     # 设计 18.1：预设卡不能把遥控器卡顶掉。
     service = build_service(tmp_path)
-    service._on_text_message("ou_test", "oc_1", "om_1", "设置卡片")   # remote
+    service._on_text_message("ou_test", "oc_1", "om_1", "设置卡片")  # remote
     remote_id = service.store.get_card("ou_test", "remote")
-    service._on_text_message("ou_test", "oc_1", "om_2", "预设")       # preset card
+    service._on_text_message("ou_test", "oc_1", "om_2", "预设")  # preset card
     assert service.store.get_card("ou_test", "preset")
     assert service.store.get_card("ou_test", "remote") == remote_id
 
@@ -450,30 +452,42 @@ def test_the_preset_entry_posts_the_list_card(tmp_path):
 
 # ------------------------------------------------------------- ui actions
 
+
 def test_a_form_submit_creates_a_preset(tmp_path):
     service = build_service(tmp_path)
-    service._on_card_action("ou_test", "oc_1", "om_1",
-                            {"a": "preset_save"}, None,
-                            {"name": "夏天", "power": "1", "mode": "1",
-                             "temp": "26", "fan": "0"}, "submit")
+    service._on_card_action(
+        "ou_test",
+        "oc_1",
+        "om_1",
+        {"a": "preset_save"},
+        None,
+        {"name": "夏天", "power": "1", "mode": "1", "temp": "26", "fan": "0"},
+        "submit",
+    )
     (saved,) = service.store.list_presets()
     assert (saved.name, saved.temp, saved.power) == ("夏天", 26, 1)
 
 
 def test_a_form_submit_without_a_name_asks_again(tmp_path):
     service = build_service(tmp_path)
-    service._on_card_action("ou_test", "oc_1", "om_1",
-                            {"a": "preset_save"}, None,
-                            {"name": "", "temp": "26"}, "submit")
+    service._on_card_action(
+        "ou_test", "oc_1", "om_1", {"a": "preset_save"}, None, {"name": "", "temp": "26"}, "submit"
+    )
     assert service.store.list_presets() == []
     assert "先起个名字" in visible_text(service.feishu.cards["om_1"])
 
 
 def test_a_form_submit_keeps_a_picked_time(tmp_path):
     service = build_service(tmp_path)
-    service._on_card_action("ou_test", "oc_1", "om_1",
-                            {"a": "preset_save"}, None,
-                            {"name": "睡觉", "temp": "26", "at": "22:30 +0800"}, "submit")
+    service._on_card_action(
+        "ou_test",
+        "oc_1",
+        "om_1",
+        {"a": "preset_save"},
+        None,
+        {"name": "睡觉", "temp": "26", "at": "22:30 +0800"},
+        "submit",
+    )
     (saved,) = service.store.list_presets()
     assert saved.timer_enabled is True
     assert saved.timer_at.startswith("22:30")
@@ -482,8 +496,7 @@ def test_a_form_submit_keeps_a_picked_time(tmp_path):
 def test_applying_from_the_card_enqueues_and_reports_on_the_card(tmp_path):
     service = build_service(tmp_path)
     preset_id = service.store.save_preset(_preset(name="夏天", temp=26))
-    service._on_card_action("ou_test", "oc_1", "om_1",
-                            {"a": "preset_apply", "v": preset_id}, None)
+    service._on_card_action("ou_test", "oc_1", "om_1", {"a": "preset_apply", "v": preset_id}, None)
     assert service._actions.qsize() == 4
     assert "已套用" in visible_text(service.feishu.cards["om_1"])
 
@@ -491,33 +504,39 @@ def test_applying_from_the_card_enqueues_and_reports_on_the_card(tmp_path):
 def test_deleting_from_the_card_removes_the_preset(tmp_path):
     service = build_service(tmp_path)
     preset_id = service.store.save_preset(_preset(name="夏天"))
-    service._on_card_action("ou_test", "oc_1", "om_1",
-                            {"a": "preset_delete", "v": preset_id}, None)
+    service._on_card_action("ou_test", "oc_1", "om_1", {"a": "preset_delete", "v": preset_id}, None)
     assert service.store.list_presets() == []
 
 
 def test_the_night_toggle_button_flips_the_setting(tmp_path):
     service = build_service(tmp_path)
-    service._on_card_action("ou_test", "oc_1", "om_1",
-                            {"a": "night_toggle", "v": 1}, None)
+    service._on_card_action("ou_test", "oc_1", "om_1", {"a": "night_toggle", "v": 1}, None)
     assert service._night_enabled() is True
 
 
 def test_saving_settings_persists_them(tmp_path):
     service = build_service(tmp_path)
-    service._on_card_action("ou_test", "oc_1", "om_1",
-                            {"a": "settings_save"}, None,
-                            {"push_time": "08:00", "night_start": "22:30",
-                             "night_end": "06:30", "night_target": "25"}, "submit")
-    assert (service._push_time(), service._night_start(), service._night_end(),
-            service._night_target()) == ("08:00", "22:30", "06:30", 25)
+    service._on_card_action(
+        "ou_test",
+        "oc_1",
+        "om_1",
+        {"a": "settings_save"},
+        None,
+        {"push_time": "08:00", "night_start": "22:30", "night_end": "06:30", "night_target": "25"},
+        "submit",
+    )
+    assert (
+        service._push_time(),
+        service._night_start(),
+        service._night_end(),
+        service._night_target(),
+    ) == ("08:00", "22:30", "06:30", 25)
 
 
 def test_the_weather_exec_button_sends_the_suggestion(tmp_path):
     service = build_service(tmp_path)
     service._last_weather = (WeatherNow(36, 50, -1), recommend(36))
-    service._on_card_action("ou_test", "oc_1", "om_1",
-                            {"a": "weather_exec", "v": 0}, None)
+    service._on_card_action("ou_test", "oc_1", "om_1", {"a": "weather_exec", "v": 0}, None)
     queued = _queued(service)
     assert ("mode", AC_MODE["cool"]) in queued
     assert ("temp", 26) in queued
@@ -531,10 +550,8 @@ def test_the_weather_exec_button_turns_the_ac_on_too(tmp_path):
     # 的规范字段序放最前。
     service = build_service(tmp_path)
     service._last_weather = (WeatherNow(36, 50, -1), recommend(36))
-    service._on_card_action("ou_test", "oc_1", "om_1",
-                            {"a": "weather_exec", "v": 0}, None)
-    assert _queued(service) == [("power", 1), ("mode", AC_MODE["cool"]),
-                                ("temp", 26)]
+    service._on_card_action("ou_test", "oc_1", "om_1", {"a": "weather_exec", "v": 0}, None)
+    assert _queued(service) == [("power", 1), ("mode", AC_MODE["cool"]), ("temp", 26)]
 
 
 def test_an_ac_button_still_works_through_the_same_callback(tmp_path):
@@ -551,6 +568,7 @@ def test_an_ac_button_yields_the_night_loop(tmp_path):
 
 
 # ---------------------------------------------------------------- the tick
+
 
 def test_the_night_loop_acts_when_the_room_is_hot(tmp_path):
     service = build_service(tmp_path)
@@ -596,8 +614,7 @@ def test_a_due_schedule_fires_once_and_is_marked_done(tmp_path):
 def test_a_badly_missed_schedule_is_dropped_not_fired(tmp_path):
     service = build_service(tmp_path)
     preset_id = service.store.save_preset(_preset(name="睡觉"))
-    service.store.add_schedule("preset", {"preset_id": preset_id},
-                               time.time() - 3600)
+    service.store.add_schedule("preset", {"preset_id": preset_id}, time.time() - 3600)
     service._run_due_schedules(time.time())
     assert service._actions.empty()
     assert service.store.list_schedules()[0].status == "dropped"
@@ -619,30 +636,41 @@ def test_the_daily_weather_push_fires_within_the_minute_window(tmp_path):
 
 # --------------------------------------------------------- device events
 
+
 def test_a_retained_failsafe_replay_is_ignored(tmp_path):
     # 设计 18.8：重启后 broker 会重放 retained 的 ac/event，那是历史不是新闻。
     service = build_service(tmp_path)
-    service._on_mqtt_event({"type": "failsafe_off", "ts": time.time(),
-                            "prev": {"power": 1, "mode": 1, "temp": 24, "fan": 0}},
-                           True)
+    service._on_mqtt_event(
+        {
+            "type": "failsafe_off",
+            "ts": time.time(),
+            "prev": {"power": 1, "mode": 1, "temp": 24, "fan": 0},
+        },
+        True,
+    )
     assert service._actions.empty()
-    assert service.view.power == 0          # untouched: still the default
+    assert service.view.power == 0  # untouched: still the default
 
 
 def test_a_failsafe_event_without_a_timestamp_is_ignored(tmp_path):
     # 固件在 NTP 同步之前不会发事件；没有 ts 就没法判断新旧，一律不信。
     service = build_service(tmp_path)
-    service._on_mqtt_event({"type": "failsafe_off",
-                            "prev": {"power": 1, "mode": 1, "temp": 24, "fan": 0}},
-                           False)
+    service._on_mqtt_event(
+        {"type": "failsafe_off", "prev": {"power": 1, "mode": 1, "temp": 24, "fan": 0}}, False
+    )
     assert service._actions.empty()
 
 
 def test_a_stale_failsafe_event_is_ignored(tmp_path):
     service = build_service(tmp_path)
-    service._on_mqtt_event({"type": "failsafe_off", "ts": time.time() - 3600,
-                            "prev": {"power": 1, "mode": 1, "temp": 24, "fan": 0}},
-                           False)
+    service._on_mqtt_event(
+        {
+            "type": "failsafe_off",
+            "ts": time.time() - 3600,
+            "prev": {"power": 1, "mode": 1, "temp": 24, "fan": 0},
+        },
+        False,
+    )
     assert service._actions.empty()
 
 
@@ -650,9 +678,14 @@ def test_a_fresh_failsafe_event_restores_the_previous_state(tmp_path):
     service = build_service(tmp_path)
     service.store.set_setting("chat_id", "oc_1")
     service.view = AcState(power=1, mode=AC_MODE["cool"], temp=24, fan=AC_FAN["auto"])
-    service._on_mqtt_event({"type": "failsafe_off", "ts": time.time(),
-                            "prev": {"power": 1, "mode": 1, "temp": 22, "fan": 1}},
-                           False)
+    service._on_mqtt_event(
+        {
+            "type": "failsafe_off",
+            "ts": time.time(),
+            "prev": {"power": 1, "mode": 1, "temp": 22, "fan": 1},
+        },
+        False,
+    )
     queued = _queued(service)
     assert ("power", 1) in queued
     assert ("temp", 22) in queued
@@ -663,9 +696,14 @@ def test_a_fresh_failsafe_event_restores_the_previous_state(tmp_path):
 def test_a_failsafe_event_for_an_ac_that_was_off_does_not_reopen_it(tmp_path):
     # 本来就关机，失联自动关机什么都没改变，不该"恢复"成开机。
     service = build_service(tmp_path)
-    service._on_mqtt_event({"type": "failsafe_off", "ts": time.time(),
-                            "prev": {"power": 0, "mode": 1, "temp": 24, "fan": 0}},
-                           False)
+    service._on_mqtt_event(
+        {
+            "type": "failsafe_off",
+            "ts": time.time(),
+            "prev": {"power": 0, "mode": 1, "temp": 24, "fan": 0},
+        },
+        False,
+    )
     assert service._actions.empty()
 
 
@@ -681,8 +719,7 @@ def test_an_unknown_device_event_is_ignored(tmp_path):
 def _preset(**overrides):
     from app.preset import Preset
 
-    values = dict(name="x", power=1, mode=AC_MODE["cool"], temp=24,
-                  fan=AC_FAN["auto"])
+    values = dict(name="x", power=1, mode=AC_MODE["cool"], temp=24, fan=AC_FAN["auto"])
     values.update(overrides)
     return Preset(**values)
 
@@ -712,6 +749,7 @@ def _past():
 
 # ------------------------------------------- design 18.12: the three gaps
 
+
 def test_a_failed_daily_weather_push_is_retried_and_marked_only_on_success(tmp_path):
     # 设计 18.12 #3：到点那次取数失败，不该等于「今天没有建议卡」。
     service = build_service(tmp_path)
@@ -720,21 +758,21 @@ def test_a_failed_daily_weather_push_is_retried_and_marked_only_on_success(tmp_p
 
     def flaky(chat_id):
         attempts.append(chat_id)
-        return len(attempts) >= 2        # 第一次取数失败，第二次成功
+        return len(attempts) >= 2  # 第一次取数失败，第二次成功
 
     service._push_weather = flaky
     now = datetime.now().replace(second=0, microsecond=0)
     service.store.set_setting("push_time", now.strftime("%H:%M"))
     at = now.timestamp()
 
-    service._maybe_push_weather(at + 5)                 # 到点：试一次，失败
+    service._maybe_push_weather(at + 5)  # 到点：试一次，失败
     assert attempts == ["oc_1"]
     assert service.store.get_setting("weather_pushed_at", "0") == "0"
 
-    service._maybe_push_weather(at + 5 + 10)            # 退避窗口内：不重打
+    service._maybe_push_weather(at + 5 + 10)  # 退避窗口内：不重打
     assert attempts == ["oc_1"]
 
-    service._maybe_push_weather(at + 5 + _WEATHER_RETRY_S)     # 退避到点：成功
+    service._maybe_push_weather(at + 5 + _WEATHER_RETRY_S)  # 退避到点：成功
     assert attempts == ["oc_1", "oc_1"]
     assert float(service.store.get_setting("weather_pushed_at")) == at + 5 + _WEATHER_RETRY_S
 
@@ -752,7 +790,7 @@ def test_a_daily_weather_push_waits_for_a_chat_instead_of_burning_the_day(tmp_pa
     at = now.timestamp()
 
     service._maybe_push_weather(at + 5)
-    assert attempts == []               # 没有会话，什么都没发
+    assert attempts == []  # 没有会话，什么都没发
     assert service.store.get_setting("weather_pushed_at", "0") == "0"
 
     service.store.set_setting("chat_id", "oc_1")
@@ -828,7 +866,7 @@ def test_a_command_that_could_not_be_published_still_times_out(tmp_path):
     service._send_burst([("temp", 26)])
     assert service._confirm_deadline > 0
     service._expire_pending()
-    assert service.pending is True            # 还没到点
+    assert service.pending is True  # 还没到点
     service._confirm_deadline = time.monotonic() - 1
     service._expire_pending()
     assert service.unconfirmed is True
@@ -859,19 +897,18 @@ def test_a_link_that_stays_down_is_redialled_and_reported_once(tmp_path):
     service.store.set_setting("chat_id", "oc_1")
     service.mqtt = FakeMqtt(connected=False)
 
-    service._mqtt_step(1000.0)                      # 第一次发现：开始计时
+    service._mqtt_step(1000.0)  # 第一次发现：开始计时
     service._mqtt_step(1000.0 + _MQTT_NOTICE_S - 1)
     assert service.mqtt.restarts == 0
     assert service.feishu.sent_text == []
 
-    service._mqtt_step(1000.0 + _MQTT_NOTICE_S)     # 真的断了：重拨 + 报一次
+    service._mqtt_step(1000.0 + _MQTT_NOTICE_S)  # 真的断了：重拨 + 报一次
     assert service.mqtt.restarts == 1
-    assert service.feishu.sent_text == [
-        ("oc_1", "⚠️ 与空调网关的 MQTT 连接已中断，正在自动重连…")]
+    assert service.feishu.sent_text == [("oc_1", "⚠️ 与空调网关的 MQTT 连接已中断，正在自动重连…")]
 
     service._mqtt_step(1000.0 + 2 * _MQTT_NOTICE_S)
     assert service.mqtt.restarts == 2
-    assert len(service.feishu.sent_text) == 1       # 同一次故障只报一次
+    assert len(service.feishu.sent_text) == 1  # 同一次故障只报一次
 
 
 def test_a_healthy_link_is_left_alone(tmp_path):
@@ -899,7 +936,7 @@ def test_a_recovered_link_says_so_once(tmp_path):
     assert service._mqtt_alerted is False
 
     service._mqtt_step(1000.0 + _MQTT_NOTICE_S + 500)
-    assert len(service.feishu.sent_text) == 2       # 恢复只播报一次
+    assert len(service.feishu.sent_text) == 2  # 恢复只播报一次
 
 
 def test_a_heartbeat_that_cannot_be_published_counts_as_a_dead_link(tmp_path):
@@ -930,8 +967,7 @@ def test_an_mqtt_update_does_not_render_on_the_paho_thread(tmp_path):
     service._render = lambda: seen.append("render")
     service._run_async = lambda fn, *args: seen.append(fn)
 
-    service._on_mqtt_state({"online": True, "power": 0, "mode": 1,
-                            "temp": 26, "fan": 1})
+    service._on_mqtt_state({"online": True, "power": 0, "mode": 1, "temp": 26, "fan": 1})
     service._on_mqtt_status({"online": True})
     assert seen == [service._render, service._render]
     assert "render" not in seen
@@ -942,8 +978,7 @@ def test_an_event_renders_off_the_paho_thread_too(tmp_path):
     seen = []
     service._render = lambda: seen.append("render")
     service._run_async = lambda fn, *args: seen.append(fn)
-    service._on_mqtt_event({"type": "failsafe_off", "ts": time.time(),
-                            "prev": {"power": 0}}, False)
+    service._on_mqtt_event({"type": "failsafe_off", "ts": time.time(), "prev": {"power": 0}}, False)
     assert seen == [service._render]
     assert "render" not in seen
 
@@ -1003,7 +1038,7 @@ def test_a_failed_patch_backs_off_before_trying_the_same_card_again(tmp_path):
     service._render_if_due()
     assert len(attempts) == 1, "退避窗口内不该重复打飞书"
 
-    service._render_retry_at = 0.0              # 窗口过了：再试一次
+    service._render_retry_at = 0.0  # 窗口过了：再试一次
     service._render_if_due()
     assert len(attempts) == 2
 
@@ -1025,8 +1060,9 @@ def test_the_weather_push_does_not_run_on_the_tick_thread(tmp_path):
 
 def test_the_weather_suggestion_uses_the_room_reading(tmp_path, monkeypatch):
     service = build_service(tmp_path)
-    monkeypatch.setattr("app.main.fetch_now",
-                        lambda **kwargs: WeatherNow(outdoor_c=16, humidity=36))
+    monkeypatch.setattr(
+        "app.main.fetch_now", lambda **kwargs: WeatherNow(outdoor_c=16, humidity=36)
+    )
     service.env = EnvReading(temp=23, humidity=36, ok=True)
     service.env_at = time.time()
 
@@ -1038,8 +1074,7 @@ def test_the_weather_suggestion_uses_the_room_reading(tmp_path, monkeypatch):
 
 def test_a_stale_room_reading_is_left_out_of_the_suggestion(tmp_path, monkeypatch):
     service = build_service(tmp_path)
-    monkeypatch.setattr("app.main.fetch_now",
-                        lambda **kwargs: WeatherNow(outdoor_c=16))
+    monkeypatch.setattr("app.main.fetch_now", lambda **kwargs: WeatherNow(outdoor_c=16))
     service.env = EnvReading(temp=23, humidity=36, ok=True)
     service.env_at = time.time() - 3600
 
@@ -1053,8 +1088,7 @@ def test_executing_a_suggestion_the_room_already_meets_sends_nothing(tmp_path):
     service = build_service(tmp_path)
     service._last_weather = (WeatherNow(16, 36, 0), recommend(16, 0, room_c=21))
 
-    service._on_card_action("ou_test", "oc_1", "om_1",
-                            {"a": "weather_exec", "v": 0}, None)
+    service._on_card_action("ou_test", "oc_1", "om_1", {"a": "weather_exec", "v": 0}, None)
 
     assert _queued(service) == []
     assert "不用开" in visible_text(service.feishu.cards["om_1"])
@@ -1076,7 +1110,7 @@ def test_a_failing_tick_pass_cannot_kill_the_ticker(tmp_path, caplog):
 
     service._record_env = boom
     with caplog.at_level("ERROR", logger="app.main"):
-        service._tick_once()             # 抛出去 = ticker 线程死 = 心跳停
+        service._tick_once()  # 抛出去 = ticker 线程死 = 心跳停
     assert "carrying on" in caplog.text
     assert not service._render_wanted.is_set(), "这一趟确实是在半路断的"
 
@@ -1096,8 +1130,7 @@ def test_applying_a_preset_yields_to_the_night_loop(tmp_path):
 def test_executing_the_weather_suggestion_yields_to_the_night_loop(tmp_path):
     service = build_service(tmp_path)
     service._last_weather = (WeatherNow(36, 50, -1), recommend(36))
-    service._on_card_action("ou_test", "oc_1", "om_1",
-                            {"a": "weather_exec", "v": 0}, None)
+    service._on_card_action("ou_test", "oc_1", "om_1", {"a": "weather_exec", "v": 0}, None)
     assert service._loop.manual_until > time.time() + 60
 
 
@@ -1105,8 +1138,7 @@ def test_a_suggestion_the_room_meets_does_not_yield(tmp_path):
     # 「不用开」什么都没改，也就没什么好让的。
     service = build_service(tmp_path)
     service._last_weather = (WeatherNow(16, 36, 0), recommend(16, 0, room_c=21))
-    service._on_card_action("ou_test", "oc_1", "om_1",
-                            {"a": "weather_exec", "v": 0}, None)
+    service._on_card_action("ou_test", "oc_1", "om_1", {"a": "weather_exec", "v": 0}, None)
     assert service._loop.manual_until == 0.0
 
 
@@ -1114,7 +1146,6 @@ def test_a_scheduled_preset_yields_too(tmp_path):
     # 预约也是业主自己的意思，不是闭环的意思。
     service = build_service(tmp_path)
     preset_id = service.store.save_preset(_preset(name="睡前"))
-    service.store.add_schedule("preset", {"preset_id": preset_id},
-                               time.time() - 1)
+    service.store.add_schedule("preset", {"preset_id": preset_id}, time.time() - 1)
     service._run_due_schedules(time.time())
     assert service._loop.manual_until > time.time() + 60

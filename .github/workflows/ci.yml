@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.12"
+          python-version: ${{ matrix.python }}
+      - name: Check lock consistency
+        run: uv lock --check
+      - name: Install frozen development dependencies
+        run: uv sync --frozen --extra dev
+      - name: Lint
+        run: uv run --frozen --extra dev ruff check .
+      - name: Format
+        run: uv run --frozen --extra dev ruff format --check .
+      - name: Offline regression tests
+        run: uv run --frozen --extra dev python -m pytest -q
+      - name: Card preview without configuration
+        run: uv run --frozen python -m app.main --print-card > /dev/null
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.12"
+          python-version: "3.12"
+      - name: Build wheel and source distribution
+        run: uv build
+      - name: Check source archive installation resources
+        run: |
+          uv run --no-project python - <<'PY'
+          import tarfile
+          import zipfile
+          from email.parser import Parser
+          from pathlib import Path
+
+          with tarfile.open(next(Path("dist").glob("*.tar.gz"))) as archive:
+              names = {name.split("/", 1)[1] for name in archive.getnames() if "/" in name}
+          required = {"uv.lock", ".env.example", "docs/deployment.md",
+                      "deploy/ac-bot.service", "deploy/ac-bot.env.example",
+                      "deploy/mosquitto-ac.production.conf.example",
+                      "deploy/mosquitto-ac.acl.example", "CONTRIBUTING.md", "SECURITY.md"}
+          assert required <= names, sorted(required - names)
+          assert not any(Path(name).name == ".env" or ".sqlite3" in name for name in names)
+          with zipfile.ZipFile(next(Path("dist").glob("*.whl"))) as wheel:
+              metadata = Parser().parsestr(wheel.read(next(
+                  name for name in wheel.namelist() if name.endswith(".dist-info/METADATA")
+              )).decode("utf-8"))
+          dependencies = {value.replace(" ", "") for value in metadata.get_all("Requires-Dist", [])}
+          assert {"lark-oapi==1.7.4", "pycryptodome==3.24.1"} <= dependencies, dependencies
+          PY
+      - name: Prepare clean package environment
+        run: |
+          uv export --frozen --no-dev --no-emit-project -o dist/requirements.txt
+          uv venv "$RUNNER_TEMP/ac-bot-package"
+          uv pip sync --python "$RUNNER_TEMP/ac-bot-package/bin/python" dist/requirements.txt
+          uv pip install --python "$RUNNER_TEMP/ac-bot-package/bin/python" --no-deps dist/*.whl
+      - name: Run installed wheel outside checkout without credentials
+        working-directory: ${{ runner.temp }}
+        run: |
+          "$RUNNER_TEMP/ac-bot-package/bin/python" -c "import importlib.metadata as m; assert m.version('ac-bot') == '0.1.0'; from app.forms import preset_from_form; assert preset_from_form({}).temp == 24"
+          "$RUNNER_TEMP/ac-bot-package/bin/python" -m app.main --print-card > /dev/null

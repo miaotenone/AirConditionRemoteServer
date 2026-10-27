@@ -80,35 +80,38 @@ v1.1/v1.2 的增补就地标在对应位置。
 
 ## 4. MQTT 契约（与固件仓库的唯一接口）
 
-**Broker**：Mosquitto，跑在树莓派，默认 `1883`（只监听局域网）。
+**Broker**：Mosquitto，默认 `1883`。开发仅 loopback；生产私网认证/ACL/防火墙配置见
+[部署指南](deployment.md)。以下按已有固件与服务实现核对，不升级协议、不改变控制策略。
 
 ### 4.1 Topics
 
-| Topic | 方向（相对本服务） | QoS | Retained | Payload |
-|---|---|---|---|---|
-| `{prefix}/cmd` | 发布 | 1 | 否 | 只含要改字段的 JSON |
-| `{prefix}/state` | 订阅 | 1 | **是** | 完整状态 JSON |
-| `{prefix}/status` | 订阅 | 1 | **是** | 在线/离线 JSON（LWT） |
-| `{prefix}/env` | 订阅 | 1 | **是** | DHT11 读数 `{temp,humidity,ok}` |
-| `{prefix}/hb` | 发布 | 0 | 否 | 服务心跳 `{ts}`（证明"决策者活着"）|
-| `{prefix}/event` | 订阅 | 1 | **是** | 设备事件 `{type,ts,prev}` |
+发布 QoS、订阅请求 QoS 和最终交付 QoS 不是同一个概念。交付不会高于
+发布与订阅双方支持的等级；不能概括为“所有消息都是 QoS1”或“所有消息都是 QoS0”。
+
+| Topic | 发布 QoS | 订阅请求 QoS | Retained |
+| --- | --- | --- | --- |
+| `{prefix}/cmd` | 服务 1 | 固件 0 | 否 |
+| `{prefix}/hb` | 服务 0 | 固件 0 | 否 |
+| `{prefix}/state` | 固件 0 | 服务 1 | 是 |
+| `{prefix}/status` 正常上线 | 固件 0 | 服务 1 | 是 |
+| `{prefix}/status` 离线遗嘱 | broker 按固件设置的 1 发布 | 服务 1 | 是 |
+| `{prefix}/env` | 固件 0 | 服务 1 | 是 |
+| `{prefix}/event` | 固件 0 | 服务 1 | 否 |
 
 `prefix` 默认 `ac`，由固件配网页设定，两边必须一致。
 
-> ⚠️ **上表的 QoS 是设计意图，线上实际是 QoS0**（2026-10-15 核对）：ESP32 侧用的是 **PubSubClient**，
-> 它的 `publish()` 第三个参数是 `retained`、**没有 QoS 参数**（只能 QoS0），`subscribe()` 同理。
-> **`Retained` 那一列是真的**（固件都传了 `true`）——retained + 固件每 30s 重发 `state`，才是实际兜底的东西。
-> 所以：**不要依赖 QoS1 的投递保证**（掉一条 `ac/state`，服务端到 `CONFIRM_TIMEOUT_S` 就会显示「⚠️ 未确认」）。
-> 要真 QoS1 得换客户端库（**不打算换**）；契约这一栏已按实情写。设计文档 §18.12.4。
-> 正常点击踩不到：固件对每条能识别的命令都**立刻**回一次 `ac/state`（§4.2）。
+`cmd` 的服务端发布 QoS1 不代表设备端执行确认。设备订阅 QoS0；服务仅在
+收到的状态与当前预测状态一致时清除待确认标记。这是网关影子状态匹配，
+不是空调实际执行的物理确认；PubSubClient 发布成功同样不等于应用处理成功。
+状态定时重发有助于最终更新显示，但不能补执行一条已经丢失的控制命令。
 
 > **为什么还要 `hb`**：Mosquitto 跑在树莓派上但**是独立的 systemd 单元**，
 > 所以「MQTT 连上了」并不等于「发命令的那个服务活着」。`hb` 是设备唯一能
 > 拿到的、关于**决策者**在不在的证据（设计 18.8）。
 >
-> **`env` / `event` 是 retained 的陷阱**：broker 会把 retained 消息重放给
-> 新订阅者。服务必须只看**非 retained** 的新消息（重放的是历史，不是读数），
-> 且 `event` 只认 `ts` 在 10 分钟以内的（设计 18.6）。
+`env` 是 retained 的，但服务拒绝 retained 重放，避免旧读数当新样点。
+`event` 不 retained；服务仍拒绝 retained event，是为了兼容旧固件或 broker
+残留，不能据此反推当前事件是 retained 的。`cmd/hb/event` 均不得改为 retained。
 
 ### 4.2 Payload 定义
 
@@ -167,15 +170,15 @@ v1.1/v1.2 的增补就地标在对应位置。
 { "ts": 1792078200 }
 ```
 
-**`{prefix}/event`（ESP32 → 服务）** — retained，设备事件（带 `ts`）：
+**`{prefix}/event`（ESP32 → 服务）** — **不 retained**，设备事件（带 `ts`）：
 
 ```json
 { "type": "failsafe_off", "ts": 1792078200, "prev": {"power":1,"mode":1,"temp":24,"fan":0} }
 ```
 
-- 目前只有 `failsafe_off`：设备连续失联 5 分钟后自行关机（见固件仓库设计）。
-- 服务收到**非 retained 且 `ts` 在 10 分钟内**的事件才动作；恢复策略要求
-  `prev.power == 1`（本来就关机就不必再开）。
+- 目前只有 `failsafe_off`：设备失联后自行关机（具体时序与限制见 §4.4）。
+- 服务收到非 retained 且时间戳通过既有校验的事件才动作；恢复策略要求
+  `prev.power == 1`（本来就关机就不必再开）。`ts` 是本次发布时刻，不是关机发生时刻。
 
 > 固件每 30s 心跳重发 `ac/state`。服务可用"最后一条 `ac/state` 的到达时间"判断数据新鲜度，超时（如 >90s）但 `status.online=true` 时提示"状态可能过期"。
 
@@ -185,11 +188,36 @@ v1.1/v1.2 的增补就地标在对应位置。
 用户点"制冷" 
   → 飞书长连接回调 action.value={"a":"mode","v":1}
   → 服务 3s 内先回一张"乐观更新"的卡片（避免超时）
-  → 服务发布 ac/cmd {"mode":1}（QoS0，见 §4.1），并起跳 5s 确认计时
+  → 服务发布 ac/cmd {"mode":1}（发布 QoS1，设备订阅 QoS0，见 §4.1），并起跳 5s 确认计时
   → ESP32 发红外帧 → 更新自身状态（并存 NVS）
   → ESP32 立刻回 ac/state (retained)      ← 确认窗口只等这一条
-  → 服务收到，用真值刷新卡片（去掉"待确认"标记）
+  → 服务收到，用网关影子状态刷新卡片；与预测一致时去掉"待确认"标记
 ```
+
+### 4.4 时间与恢复边界
+
+以下是既有实现限制，不是此次规范化新增的行为：
+
+- 心跳间隔默认 30 秒。设备收到心跳时用 `millis()` 记录到达时间，
+  不使用心跳 payload 中的 `ts` 判断活性。
+- 以下以首次健康联系后已武装保护为前提：Wi-Fi/MQTT 持续断开时，
+  距最后健康联系约 300 秒关机；仅心跳中断、MQTT 仍在线时，从最后一次
+  收到心跳起约 90 + 300 = 390 秒关机，另有循环执行延迟。
+- 事件 `ts` 是本次发布时生成的 Unix 秒，不是失联关机发生时刻。服务
+  拒绝缺失、非数字或低于可用时间下限的 ts，并拒绝按服务墙钟计算年龄
+  大于 600 秒的事件；当前实现没有未来时间戳上限。
+- 自动恢复是尽力而为，不是保证。未同步可信时钟时不发送事件；待报事件
+  在 RAM 中，网络 watchdog 重启会丢失它。关机状态保存在 NVS，
+  重启从 NVS 恢复该关机影子状态，启动本身不发开机红外，也不通过
+  自动开机弥补恢复事件丢失。
+- 当前恢复消息缺少与用户操作之间的顺序标识，可能覆盖恢复前后新提交的
+  用户命令；不得把它描述为“最新用户意图总是优先”。
+- 当前服务心跳调度依赖墙钟，系统时间回拨可能延后发送；设备判活
+  则使用单调时间。部署时应维持正常校时。
+- retained state 是设备影子缓存，不是当前在线证明；现服务会把其接收
+  时刻作为状态更新时间并可能标在线，不能将其解释成真实采样时间。
+
+要修复控制优先级、时间语义或在线判定，需要单独设计回归测试和兼容方案。
 
 ---
 
@@ -460,46 +488,20 @@ class Presence:
 
 ---
 
-## 8. 部署
+## 8. 部署与运维
 
-本仓库的 [`deploy/mosquitto-ac.conf`](../deploy/mosquitto-ac.conf) 是**已在树莓派上验证通过**的版本：
+当前安装步骤见 [Linux 部署指南](deployment.md)，不要使用旧个人主机的账号和 home 路径。
+模板集中在 `deploy/`：
 
-```ini
-# /etc/mosquitto/conf.d/ac.conf
-listener 1883 0.0.0.0
-allow_anonymous true          # 内网可接受；要求更高则改用密码/ACL
-```
+- `ac-bot.service`：专用 `ac-bot` 账号、`/opt/ac-bot` checkout、独立 EnvironmentFile；
+  保留 StateDirectory 及 broker stop/start/restart 联动。
+- `ac-bot.env.example`：生产绝对 DB_PATH；本地 `.env.example` 则使用相对路径。
+- `mosquitto-ac.conf`：仅 loopback 匿名开发，不用于生产。
+- `mosquitto-ac.production.conf.example` / `mosquitto-ac.acl.example`：认证私网 listener 与最小 ACL。
 
-> ⚠️ **不要把 `persistence` / `persistence_location` 写进 drop-in**：Ubuntu 自带的
-> `/etc/mosquitto/mosquitto.conf` 已经设置了两者，mosquitto 2.0 把重复项当**致命错误**，
-> 会直接启动失败（`Error: Duplicate persistence_location value in configuration.`）。
-> 这个坑已经踩过一次，详见 `deploy/mosquitto-ac.conf` 顶部的注释。
-
-```ini
-# /etc/systemd/system/ac-bot.service
-[Unit]
-Description=AC Feishu Bot
-After=network-online.target mosquitto.service
-Wants=mosquitto.service
-
-[Service]
-User=pi
-WorkingDirectory=/home/dirj/project/AirConditionRemoteServer
-EnvironmentFile=/home/dirj/project/AirConditionRemoteServer/.env
-ExecStart=/home/dirj/project/AirConditionRemoteServer/.venv/bin/python -m app.main
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-> 上面是 2026-10-12 的设计草案。**真正下发到树莓派的是
-> [`deploy/ac-bot.service`](../deploy/ac-bot.service)**：`User=dirj`（这台机器上没有 `pi` 用户）、
-> 多了 `StateDirectory=ac-bot` / `Environment=DB_PATH=/var/lib/ac-bot/ac-bot.sqlite3`，
-> 以及 `NoNewPrivileges` / `PrivateTmp` / `Nice` 三条加固。检出位置
-> **`~/project/AirConditionRemoteServer`**（2026-10-15 从 `/opt/ac-bot` 迁入，
-> 见 [`feishu-bringup.md`](feishu-bringup.md) §2）。
+安装使用 `uv sync --frozen --no-dev`，迁移前核对实际数据库位置并做一致备份。
+模板不会自动修改当前运行实例；是否启动或重启由管理员在维护窗口决定。
+原个人部署及故障复盘原文见 [历史索引](history/README.md)，不作为当前安装命令。
 
 ---
 
@@ -515,6 +517,7 @@ AirConditionRemoteServer/
     mqtt_client.py     # ✅ 连接/重连/订阅/发布 + 回调分发
     state.py           # ✅ AcState / Presence / 夹取 / 合并 / 指纹
     actions.py         # ✅ 回调归一化：按钮 action.value 与下拉 action.option → (a, v)
+    forms.py           # 纯表单适配：默认值与字段筛选，不做 I/O
     cards.py           # ✅ 卡片 JSON 构造（纯函数）
     feishu_client.py   # ✅ 长连接、发卡/更新卡、回调路由
     store.py           # ✅ SQLite: owner ↔ message_id
@@ -525,8 +528,8 @@ AirConditionRemoteServer/
     test_config.py     # ✅ 环境变量契约
     test_store.py      # ✅ 卡片映射
   deploy/
-    mosquitto-ac.conf  # ✅ 已在树莓派部署并验证
-    ac-bot.service     # ✅ 注意 User=dirj（树莓派上没有 pi 用户）；检出在 ~/project/AirConditionRemoteServer
+    mosquitto-ac.conf  # 仅 loopback 匿名开发
+    ac-bot.service     # 通用专用账号模板；参见 deployment.md
   docs/
     interface-spec.md  # 本文件
     mqtt-bringup.md    # MQTT 链路验证记录 + 环境事实

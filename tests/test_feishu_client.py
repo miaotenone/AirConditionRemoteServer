@@ -14,7 +14,9 @@ from app.feishu_client import FeishuClient
 
 def _ok(message_id: str = "om_reply"):
     return types.SimpleNamespace(
-        success=lambda: True, code=0, msg="ok",
+        success=lambda: True,
+        code=0,
+        msg="ok",
         data=types.SimpleNamespace(message_id=message_id),
     )
 
@@ -29,20 +31,22 @@ def make_client(on_text=None):
         return _ok()
 
     client._api = types.SimpleNamespace(
-        im=types.SimpleNamespace(v1=types.SimpleNamespace(
-            message=types.SimpleNamespace(reply=reply)))
+        im=types.SimpleNamespace(
+            v1=types.SimpleNamespace(message=types.SimpleNamespace(reply=reply))
+        )
     )
     return client, calls
 
 
 def _message(message_type="text", content='{"text":"开机"}', message_id="om_9"):
-    return types.SimpleNamespace(event=types.SimpleNamespace(
-        message=types.SimpleNamespace(
-            message_type=message_type, message_id=message_id,
-            chat_id="oc_9", content=content),
-        sender=types.SimpleNamespace(
-            sender_id=types.SimpleNamespace(open_id="ou_9")),
-    ))
+    return types.SimpleNamespace(
+        event=types.SimpleNamespace(
+            message=types.SimpleNamespace(
+                message_type=message_type, message_id=message_id, chat_id="oc_9", content=content
+            ),
+            sender=types.SimpleNamespace(sender_id=types.SimpleNamespace(open_id="ou_9")),
+        )
+    )
 
 
 def test_reply_text_calls_the_reply_api_and_reports_success():
@@ -55,7 +59,8 @@ def test_reply_text_reports_failure_without_raising():
     # 长连接不能在回调里被一次失败的回复打断
     client, _ = make_client()
     client._api.im.v1.message.reply = lambda request: types.SimpleNamespace(
-        success=lambda: False, code=99991663, msg="denied", data=None)
+        success=lambda: False, code=99991663, msg="denied", data=None
+    )
     assert client.reply_text("om_1", "hi") is False
 
 
@@ -77,22 +82,33 @@ def test_non_text_and_malformed_messages_are_ignored_silently():
 
 # --------------------------------------------------------------- card clicks
 
-def _card_action(value=None, option=None, operator="ou_9",
-                 chat_id="oc_9", message_id="om_9", form_value=None, name=None):
+
+def _card_action(
+    value=None,
+    option=None,
+    operator="ou_9",
+    chat_id="oc_9",
+    message_id="om_9",
+    form_value=None,
+    name=None,
+):
     """The shape lark-oapi really hands `_on_card_action`: nested under `event`."""
-    return types.SimpleNamespace(event=types.SimpleNamespace(
-        operator=types.SimpleNamespace(open_id=operator),
-        action=types.SimpleNamespace(value=value, option=option,
-                                     form_value=form_value, name=name),
-        context=types.SimpleNamespace(
-            open_chat_id=chat_id, open_message_id=message_id),
-    ))
+    return types.SimpleNamespace(
+        event=types.SimpleNamespace(
+            operator=types.SimpleNamespace(open_id=operator),
+            action=types.SimpleNamespace(
+                value=value, option=option, form_value=form_value, name=name
+            ),
+            context=types.SimpleNamespace(open_chat_id=chat_id, open_message_id=message_id),
+        )
+    )
 
 
 def _action_client():
     seen = []
-    client = FeishuClient(app_id="cli_test", app_secret="secret",
-                          on_action=lambda *args: seen.append(args))
+    client = FeishuClient(
+        app_id="cli_test", app_secret="secret", on_action=lambda *args: seen.append(args)
+    )
     return client, seen
 
 
@@ -114,21 +130,34 @@ def test_temperature_select_reports_through_action_option():
 def test_a_form_submit_carries_form_value_and_the_element_name():
     # 设计 18.3：表单提交的字段在 action.form_value 里，键是元素 name。
     client, seen = _action_client()
-    client._on_card_action(_card_action(value={"a": "preset_save"},
-                                        form_value={"name": "夏天", "temp": "26"},
-                                        name="submit"))
-    assert seen == [("ou_9", "oc_9", "om_9", {"a": "preset_save"}, None,
-                     {"name": "夏天", "temp": "26"}, "submit")]
+    client._on_card_action(
+        _card_action(
+            value={"a": "preset_save"}, form_value={"name": "夏天", "temp": "26"}, name="submit"
+        )
+    )
+    assert seen == [
+        (
+            "ou_9",
+            "oc_9",
+            "om_9",
+            {"a": "preset_save"},
+            None,
+            {"name": "夏天", "temp": "26"},
+            "submit",
+        )
+    ]
 
 
 def test_unnested_card_payload_still_works():
     # Fallback: an SDK build that hands the click over flat must not regress.
     client, seen = _action_client()
-    client._on_card_action(types.SimpleNamespace(
-        operator=types.SimpleNamespace(open_id="ou_9"),
-        action=types.SimpleNamespace(value={"a": "temp", "v": 20}, option=None),
-        context=types.SimpleNamespace(open_chat_id="oc_9", open_message_id="om_9"),
-    ))
+    client._on_card_action(
+        types.SimpleNamespace(
+            operator=types.SimpleNamespace(open_id="ou_9"),
+            action=types.SimpleNamespace(value={"a": "temp", "v": 20}, option=None),
+            context=types.SimpleNamespace(open_chat_id="oc_9", open_message_id="om_9"),
+        )
+    )
     assert seen == [("ou_9", "oc_9", "om_9", {"a": "temp", "v": 20}, None, None, None)]
 
 
@@ -136,20 +165,30 @@ def test_fully_flat_card_payload_is_read_too():
     # 2026-10-14 上机：真实点击事件既没有 `event`，也没有 operator/action 包装，
     # 只有裸字段 —— 少了这条路径，按钮点了就像没点，而且日志里看不出原因。
     client, seen = _action_client()
-    client._on_card_action(types.SimpleNamespace(
-        open_id="ou_9", open_chat_id="oc_9", open_message_id="om_9",
-        value={"a": "power", "v": 0}, option=None))
+    client._on_card_action(
+        types.SimpleNamespace(
+            open_id="ou_9",
+            open_chat_id="oc_9",
+            open_message_id="om_9",
+            value={"a": "power", "v": 0},
+            option=None,
+        )
+    )
     assert seen == [("ou_9", "oc_9", "om_9", {"a": "power", "v": 0}, None, None, None)]
 
 
 def test_a_dict_payload_is_read_too():
     # SDK 把回调当纯字典交出来时 getattr 只能拿到默认值 —— 字典也得认。
     client, seen = _action_client()
-    client._on_card_action({"event": {
-        "operator": {"open_id": "ou_9"},
-        "action": {"value": {"a": "mode", "v": 1}, "option": None},
-        "context": {"open_chat_id": "oc_9", "open_message_id": "om_9"},
-    }})
+    client._on_card_action(
+        {
+            "event": {
+                "operator": {"open_id": "ou_9"},
+                "action": {"value": {"a": "mode", "v": 1}, "option": None},
+                "context": {"open_chat_id": "oc_9", "open_message_id": "om_9"},
+            }
+        }
+    )
     assert seen == [("ou_9", "oc_9", "om_9", {"a": "mode", "v": 1}, None, None, None)]
 
 
@@ -187,7 +226,7 @@ def test_a_body_the_sdk_cannot_parse_is_only_a_failed_call(caplog):
     client._api.im.v1.message.patch = boom
     with caplog.at_level("WARNING", logger="app.feishu_client"):
         assert client.patch_card("om_1", {"a": 1}) is False
-    assert len(attempts) == 2                       # 规范 §10：重试一次
+    assert len(attempts) == 2  # 规范 §10：重试一次
     assert "patch_card raised on attempt 1/2" in caplog.text
 
 
@@ -222,8 +261,7 @@ def test_a_plain_rejection_is_not_retried(caplog):
 
     def denied(request):
         calls.append(request)
-        return types.SimpleNamespace(success=lambda: False, code=99991663,
-                                     msg="denied", data=None)
+        return types.SimpleNamespace(success=lambda: False, code=99991663, msg="denied", data=None)
 
     client._api.im.v1.message.patch = denied
     with caplog.at_level("ERROR", logger="app.feishu_client"):
@@ -242,7 +280,8 @@ def test_a_success_without_a_body_reports_no_message_id():
     # 契约之外的响应不该在调用线程上炸成 AttributeError。
     client, _ = make_client()
     client._api.im.v1.message.create = lambda request: types.SimpleNamespace(
-        success=lambda: True, code=0, msg="ok", data=None)
+        success=lambda: True, code=0, msg="ok", data=None
+    )
     assert client.send_card("oc_1", {"a": 1}) is None
 
 

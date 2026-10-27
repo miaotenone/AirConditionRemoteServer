@@ -60,8 +60,9 @@ def test_nothing_present_is_rejected():
 
 
 def test_a_ui_button_normalises_to_a_ui_action():
-    assert normalize_ui_action(value={"a": "preset_apply", "v": 3}) == \
-        UIAction(kind="preset_apply", target=3)
+    assert normalize_ui_action(value={"a": "preset_apply", "v": 3}) == UIAction(
+        kind="preset_apply", target=3
+    )
     assert normalize_ui_action(value={"a": "preset_new", "v": 0}).kind == "preset_new"
 
 
@@ -80,14 +81,16 @@ def test_night_toggle_carries_the_requested_state():
 
 
 def test_a_form_submit_carries_the_form_values():
-    action = normalize_ui_action(value={"a": "preset_save"},
-                                 form_value={"name": "夏天", "temp": "26"})
+    action = normalize_ui_action(
+        value={"a": "preset_save"}, form_value={"name": "夏天", "temp": "26"}
+    )
     assert action == UIAction(kind="preset_save", form={"name": "夏天", "temp": "26"})
 
 
 def test_a_history_button_carries_its_window():
-    assert normalize_ui_action(value={"a": "history_switch", "v": "week"}) == \
-        UIAction(kind="history_switch", window="week")
+    assert normalize_ui_action(value={"a": "history_switch", "v": "week"}) == UIAction(
+        kind="history_switch", window="week"
+    )
 
 
 def test_an_unknown_history_window_is_rejected():

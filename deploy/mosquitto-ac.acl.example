@@ -1,0 +1,17 @@
+# Exact default prefix ac. Change BOTH peers and this ACL together if customized.
+# Give each peer a separate password. Do not grant either user write to ac/#.
+user ac-bot
+topic write ac/cmd
+topic write ac/hb
+topic read ac/state
+topic read ac/status
+topic read ac/env
+topic read ac/event
+
+user ac-device
+topic read ac/cmd
+topic read ac/hb
+topic write ac/state
+topic write ac/status
+topic write ac/env
+topic write ac/event

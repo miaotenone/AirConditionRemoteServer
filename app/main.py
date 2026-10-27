@@ -24,8 +24,10 @@ import queue
 import sys
 import threading
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime
+from typing import Any
 
 from .actions import normalize_action, normalize_ui_action
 from .cards import (
@@ -40,12 +42,14 @@ from .cards import (
     build_weather_card,
 )
 from .config import Settings
-from .control import LoopState, MANUAL_YIELD_S, decide
-from .env import aggregate, chart_points, parse_env
+from .control import MANUAL_YIELD_S, LoopState, decide
+from .env import ChartPoint, EnvReading, Summary, aggregate, chart_points, parse_env
 from .feishu_client import FeishuClient
-from .intent import parse
+from .forms import preset_from_form, settings_updates
+from .intent import Intent, parse
 from .mqtt_client import MqttBridge
-from .preset import Preset, actions as preset_actions, normalize_name, resolve
+from .preset import Preset, resolve
+from .preset import actions as preset_actions
 from .replies import (
     render,
     render_history,
@@ -63,7 +67,6 @@ from .schedule import (
     night_bounds,
 )
 from .state import (
-    AC_FAN,
     AcState,
     Presence,
     apply_action,
@@ -81,7 +84,8 @@ from .store import (
     CARD_WEATHER,
     CardStore,
 )
-from .weather import fetch_now, recommend
+from .weather import Recommendation, WeatherNow, fetch_now, recommend
+from .weather import actions as weather_actions
 
 log = logging.getLogger(__name__)
 
@@ -112,7 +116,7 @@ S_WEATHER_PUSHED_AT = "weather_pushed_at"
 #: midnight. This replaces the old "60 s window or nothing" rule, which is why
 #: there is no longer a `_DAILY_WINDOW_S`: a late card about today's weather
 #: beats no card at all.
-_WEATHER_RETRY_S = 300.0        # 5 min between tries after a failure
+_WEATHER_RETRY_S = 300.0  # 5 min between tries after a failure
 _WEATHER_CATCHUP_S = 2 * 3600.0  # ... and no attempt later than this
 
 #: How long the MQTT link may stay down before the service re-dials and says so.
@@ -171,27 +175,27 @@ class Service:
         self.presence = Presence()
 
         #: Latest DHT11 reading, and when it arrived (design §9.1).
-        self.env = None
+        self.env: EnvReading | None = None
         self.env_at = 0.0
 
-        self.pending = False        # a command is in flight -> show the hourglass
-        self.unconfirmed = False    # nothing came back in time -> show the warning
+        self.pending = False  # a command is in flight -> show the hourglass
+        self.unconfirmed = False  # nothing came back in time -> show the warning
 
-        self._state_at = 0.0        # wall clock of the last ac/state
+        self._state_at = 0.0  # wall clock of the last ac/state
         self._confirm_deadline = 0.0
         self._rendered: dict[str, str] = {}
-        self._render_retry_at = 0.0     # when a failed patch may be retried
-        self._render_wanted = threading.Event()     # "card may be out of date"
-        self._weather_pushing = False   # a daily push is out on its own thread
-        self._loop = LoopState()    # the night loop's memory
+        self._render_retry_at = 0.0  # when a failed patch may be retried
+        self._render_wanted = threading.Event()  # "card may be out of date"
+        self._weather_pushing = False  # a daily push is out on its own thread
+        self._loop = LoopState()  # the night loop's memory
         self._last_env_record = 0.0
         self._last_hb = 0.0
-        self._weather_retry_at = 0.0    # when a failed daily push may try again
-        self._mqtt_down_since = 0.0     # when the link was first seen down
-        self._mqtt_alerted = False      # the owner has been told about this outage
-        self._mqtt_publish_failed = False   # last heartbeat could not be sent
+        self._weather_retry_at = 0.0  # when a failed daily push may try again
+        self._mqtt_down_since = 0.0  # when the link was first seen down
+        self._mqtt_alerted = False  # the owner has been told about this outage
+        self._mqtt_publish_failed = False  # last heartbeat could not be sent
         self._lock = threading.RLock()
-        self._actions: queue.Queue = queue.Queue()
+        self._actions: queue.Queue[tuple[str, int]] = queue.Queue()
         self._stop = threading.Event()
 
         self.mqtt = MqttBridge(
@@ -222,14 +226,16 @@ class Service:
         self.feishu.start()
         threading.Thread(target=self._publish_worker, name="publisher", daemon=True).start()
         threading.Thread(target=self._tick, name="ticker", daemon=True).start()
-        threading.Thread(target=self._renderer_worker, name="renderer",
-                         daemon=True).start()
-        log.info("service up (owner=%s, prefix=%s)", self.settings.owner_open_id,
-                 self.settings.mqtt_prefix)
+        threading.Thread(target=self._renderer_worker, name="renderer", daemon=True).start()
+        log.info(
+            "service up (owner=%s, prefix=%s)",
+            self.settings.owner_open_id,
+            self.settings.mqtt_prefix,
+        )
 
     def stop(self) -> None:
         self._stop.set()
-        self._render_wanted.set()   # let the renderer see `_stop` and leave
+        self._render_wanted.set()  # let the renderer see `_stop` and leave
         self.mqtt.stop()
         self.store.close()
 
@@ -242,10 +248,10 @@ class Service:
             self.presence = presence_from_state(self.presence, time.time())
             self._state_at = time.time()
             if self.pending and state.fingerprint() == self.view.fingerprint():
-                self.pending = False            # our command landed
+                self.pending = False  # our command landed
             if not self.pending:
                 self.unconfirmed = False
-                self.view = state               # nothing outstanding: truth wins
+                self.view = state  # nothing outstanding: truth wins
         self._render_off_thread()
 
     def _on_mqtt_status(self, payload: dict) -> None:
@@ -321,9 +327,11 @@ class Service:
         try:
             if int(previous.get("power", 0)) != 1:
                 return False
-            actions = [(field, int(previous[field]))
-                       for field in ("power", "mode", "temp", "fan")
-                       if field in previous]
+            actions = [
+                (field, int(previous[field]))
+                for field in ("power", "mode", "temp", "fan")
+                if field in previous
+            ]
         except (TypeError, ValueError):
             log.warning("fail-safe event carried an unreadable prev state: %r", previous)
             return False
@@ -336,14 +344,16 @@ class Service:
         if chat_id:
             # Called from the MQTT thread, so the Feishu round trip is handed
             # off rather than blocking the client loop.
-            self._run_async(self.feishu.send_text, chat_id,
-                            "🔌 设备失联已自动关机，重新连上后已恢复原先的空调状态")
+            self._run_async(
+                self.feishu.send_text,
+                chat_id,
+                "🔌 设备失联已自动关机，重新连上后已恢复原先的空调状态",
+            )
         return True
 
     # ----------------------------------------------------------- Feishu inbound
 
-    def _on_text_message(self, open_id: str, chat_id: str,
-                         message_id: str, text: str) -> None:
+    def _on_text_message(self, open_id: str, chat_id: str, message_id: str, text: str) -> None:
         """Text is just another way to press a button.
 
         The parsed actions go into the *same* queue the card uses, so the
@@ -397,7 +407,9 @@ class Service:
 
         with self._lock:
             receipt = render(
-                intent, before, self.presence,
+                intent,
+                before,
+                self.presence,
                 stale=is_stale(self.presence, time.time(), self.settings.stale_after_s),
                 updated_at=self._updated_at(),
             )
@@ -410,7 +422,7 @@ class Service:
         else:
             log.info("ignoring message %r; send one of %s for the card", text, CARD_COMMANDS)
 
-    def _handle_context_intent(self, intent, chat_id: str, message_id: str) -> None:
+    def _handle_context_intent(self, intent: Intent, chat_id: str, message_id: str) -> None:
         """Answer the four data-driven kinds (design 9.4)."""
         if intent.kind == "history":
             self._history_answer(intent.hint, chat_id, message_id)
@@ -421,7 +433,7 @@ class Service:
         elif intent.kind == "preset":
             self._preset_intent(intent, chat_id, message_id)
 
-    def _history_view(self, window: str):
+    def _history_view(self, window: str) -> tuple[Summary, tuple[ChartPoint, ...], int | None]:
         """``(summary, chart points, target)`` for one window.
 
         One reader for text and picture: if these two ever disagree the card
@@ -432,10 +444,8 @@ class Service:
         start, end = self._night_start(), self._night_end()
         target = self._night_target() if self._night_enabled() else None
         return (
-            aggregate(samples, now=now, window=window,
-                      night_start=start, night_end=end),
-            chart_points(samples, now=now, window=window,
-                         night_start=start, night_end=end),
+            aggregate(samples, now=now, window=window, night_start=start, night_end=end),
+            chart_points(samples, now=now, window=window, night_start=start, night_end=end),
             target,
         )
 
@@ -451,9 +461,12 @@ class Service:
         self.feishu.reply_text(message_id, render_history(summary, target=target))
         if len(points) < 2:
             return
-        self._show_card(CARD_HISTORY, chat_id,
-                        build_history_card(summary, target=target, points=points),
-                        to_bottom=True)
+        self._show_card(
+            CARD_HISTORY,
+            chat_id,
+            build_history_card(summary, target=target, points=points),
+            to_bottom=True,
+        )
 
     def _history_switch(self, window: str, chat_id: str, message_id: str) -> None:
         """A window button: always repaint the card the finger is on.
@@ -463,18 +476,25 @@ class Service:
         to the window they asked for is the answer (design 18.1).
         """
         summary, points, target = self._history_view(window)
-        self._show_card(CARD_HISTORY, chat_id,
-                        build_history_card(summary, target=target, points=points),
-                        prefer=message_id)
+        self._show_card(
+            CARD_HISTORY,
+            chat_id,
+            build_history_card(summary, target=target, points=points),
+            prefer=message_id,
+        )
 
     def _night_switch(self, mode: str) -> str:
         if mode == "on":
             self.store.set_setting(S_NIGHT_ENABLED, "1")
         elif mode == "off":
             self.store.set_setting(S_NIGHT_ENABLED, "0")
-        text = render_night(mode, enabled=self._night_enabled(),
-                            target=self._night_target(),
-                            start=self._night_start(), end=self._night_end())
+        text = render_night(
+            mode,
+            enabled=self._night_enabled(),
+            target=self._night_target(),
+            start=self._night_start(),
+            end=self._night_end(),
+        )
         if mode != "status":
             self._show_settings_card(self._chat_id(), to_bottom=True)
         return text
@@ -499,13 +519,13 @@ class Service:
         runs here, after the SDK has had time to write its ack. Overridden in
         tests so the dispatch stays deterministic.
         """
+
         def follow_up() -> None:
             if self._stop.wait(CALLBACK_SETTLE_S):
-                return              # shutting down: don't start new work
+                return  # shutting down: don't start new work
             fn(*args)
 
-        threading.Thread(target=follow_up, name="card-followup",
-                         daemon=True).start()
+        threading.Thread(target=follow_up, name="card-followup", daemon=True).start()
 
     def _weather_now(self, chat_id: str, message_id: str) -> None:
         # The fetch is the one slow thing a text command can trigger, so it
@@ -516,16 +536,17 @@ class Service:
         now, recommendation = self._weather_snapshot()
         self.feishu.reply_text(message_id, render_weather(now, recommendation))
         if now is not None and recommendation is not None:
-            self._show_card(CARD_WEATHER, chat_id,
-                            build_weather_card(now, recommendation),
-                            to_bottom=True)
+            self._show_card(
+                CARD_WEATHER, chat_id, build_weather_card(now, recommendation), to_bottom=True
+            )
 
     def _preset_intent(self, intent, chat_id: str, message_id: str) -> None:
         hint = intent.hint or ""
         if hint == "open":
             self._show_preset_card(chat_id, status="", to_bottom=True)
-            self.feishu.reply_text(message_id, render(
-                intent, self.view, self.presence, updated_at=self._updated_at()))
+            self.feishu.reply_text(
+                message_id, render(intent, self.view, self.presence, updated_at=self._updated_at())
+            )
             return
         if hint.startswith("apply:"):
             name = hint.split(":", 1)[1]
@@ -539,8 +560,16 @@ class Service:
 
     # ------------------------------------------------------- card clicks / forms
 
-    def _on_card_action(self, open_id: str, chat_id: str, message_id: str,
-                        value, option, form_value=None, card_name=None) -> None:
+    def _on_card_action(
+        self,
+        open_id: str,
+        chat_id: str,
+        message_id: str,
+        value,
+        option,
+        form_value=None,
+        card_name=None,
+    ) -> None:
         """Fast path: authorise, normalise, go optimistic, queue.
 
         Every *Feishu write* a click causes is handed to a follow-up thread: the
@@ -559,8 +588,7 @@ class Service:
         if ui_action is not None:
             # The preset/settings/weather cards: the answer is a card patch, so
             # the whole branch can wait for the ack.
-            self._run_after_callback(self._handle_ui_action, ui_action,
-                                     chat_id, message_id)
+            self._run_after_callback(self._handle_ui_action, ui_action, chat_id, message_id)
             return
 
         action = normalize_action(value=value, option=option)
@@ -595,24 +623,20 @@ class Service:
         if kind == "preset_open":
             self._show_preset_card(chat_id, status="", prefer=message_id)
         elif kind == "preset_new":
-            self._show_card(CARD_PRESET, chat_id, build_preset_form(),
-                            prefer=message_id)
+            self._show_card(CARD_PRESET, chat_id, build_preset_form(), prefer=message_id)
         elif kind == "preset_edit":
             preset = self.store.get_preset(ui_action.target)
             if preset is None:
-                self._show_preset_card(chat_id, status="❌ 这个预设已经不在了",
-                                       prefer=message_id)
+                self._show_preset_card(chat_id, status="❌ 这个预设已经不在了", prefer=message_id)
             else:
-                self._show_card(CARD_PRESET, chat_id, build_preset_form(preset),
-                                prefer=message_id)
+                self._show_card(CARD_PRESET, chat_id, build_preset_form(preset), prefer=message_id)
         elif kind == "preset_delete":
             self.store.delete_preset(ui_action.target)
             self._show_preset_card(chat_id, status="✅ 已删除", prefer=message_id)
         elif kind == "preset_apply":
             preset = self.store.get_preset(ui_action.target)
             if preset is None:
-                self._show_preset_card(chat_id, status="❌ 这个预设已经不在了",
-                                       prefer=message_id)
+                self._show_preset_card(chat_id, status="❌ 这个预设已经不在了", prefer=message_id)
             else:
                 status = self._apply_preset(preset, chat_id, message_id=None)
                 self._show_preset_card(chat_id, status=status, prefer=message_id)
@@ -630,18 +654,28 @@ class Service:
         elif kind == "weather_exec":
             self._execute_weather(chat_id, message_id)
         elif kind == "weather_ignore":
-            self._show_card(CARD_WEATHER, chat_id,
-                            build_weather_card(self._last_weather[0],
-                                               self._last_weather[1],
-                                               status="已忽略今天的建议"),
-                            prefer=message_id)
+            self._show_card(
+                CARD_WEATHER,
+                chat_id,
+                build_weather_card(
+                    self._last_weather[0], self._last_weather[1], status="已忽略今天的建议"
+                ),
+                prefer=message_id,
+            )
         else:  # pragma: no cover - the vocabulary is closed
             log.warning("unhandled ui action %r", kind)
 
     # ------------------------------------------------------------ card plumbing
 
-    def _show_card(self, kind: str, chat_id: str, card: dict,
-                   *, prefer: str | None = None, to_bottom: bool = False) -> str | None:
+    def _show_card(
+        self,
+        kind: str,
+        chat_id: str,
+        card: dict,
+        *,
+        prefer: str | None = None,
+        to_bottom: bool = False,
+    ) -> str | None:
         """Patch the card this kind already owns; post one if there is none.
 
         Each kind owns its own message (design 18.1), so patching the remote
@@ -679,29 +713,39 @@ class Service:
         """Recall the card the user has walked away from; notice it if too old."""
         if self.feishu.recall_card(old):
             return
-        title = (card.get("header", {}).get("title") or {}).get("content") \
-            or HEADER_TITLE
+        title = (card.get("header", {}).get("title") or {}).get("content") or HEADER_TITLE
         if not self.feishu.patch_card(
-                old, build_moved_notice_card(title, text=MENU_MOVED_NOTICE_TEXT)):
+            old, build_moved_notice_card(title, text=MENU_MOVED_NOTICE_TEXT)
+        ):
             log.warning("could not recall or downgrade the old %s card %s", kind, old)
 
-    def _show_preset_card(self, chat_id: str, *, status: str = "",
-                          prefer: str | None = None, to_bottom: bool = False) -> None:
-        self._show_card(CARD_PRESET, chat_id,
-                        build_preset_card(self.store.list_presets(), status=status),
-                        prefer=prefer, to_bottom=to_bottom)
+    def _show_preset_card(
+        self, chat_id: str, *, status: str = "", prefer: str | None = None, to_bottom: bool = False
+    ) -> None:
+        self._show_card(
+            CARD_PRESET,
+            chat_id,
+            build_preset_card(self.store.list_presets(), status=status),
+            prefer=prefer,
+            to_bottom=to_bottom,
+        )
 
-    def _show_settings_card(self, chat_id: str, *, status: str = "",
-                            prefer: str | None = None, to_bottom: bool = False) -> None:
-        self._show_card(CARD_SETTINGS, chat_id,
-                        build_settings_card(self._setting_map(),
-                                            night_enabled=self._night_enabled(),
-                                            status=status),
-                        prefer=prefer, to_bottom=to_bottom)
+    def _show_settings_card(
+        self, chat_id: str, *, status: str = "", prefer: str | None = None, to_bottom: bool = False
+    ) -> None:
+        self._show_card(
+            CARD_SETTINGS,
+            chat_id,
+            build_settings_card(
+                self._setting_map(), night_enabled=self._night_enabled(), status=status
+            ),
+            prefer=prefer,
+            to_bottom=to_bottom,
+        )
 
     # --------------------------------------------------------------- presets
 
-    def _save_preset_form(self, form, chat_id: str, message_id: str) -> None:
+    def _save_preset_form(self, form: Mapping[str, Any], chat_id: str, message_id: str) -> None:
         preset_id = 0
         raw_id = form.get("preset_id")
         try:
@@ -711,36 +755,22 @@ class Service:
 
         preset = self._preset_from_form(form, preset_id=preset_id)
         if not preset.name:
-            self._show_card(CARD_PRESET, chat_id,
-                            build_preset_form(preset, status="❌ 先起个名字"),
-                            prefer=message_id)
+            self._show_card(
+                CARD_PRESET,
+                chat_id,
+                build_preset_form(preset, status="❌ 先起个名字"),
+                prefer=message_id,
+            )
             return
         self.store.save_preset(preset)
-        self._show_preset_card(chat_id, status=f"✅ 已保存「{preset.name}」",
-                               prefer=message_id)
+        self._show_preset_card(chat_id, status=f"✅ 已保存「{preset.name}」", prefer=message_id)
 
     @staticmethod
-    def _preset_from_form(form, *, preset_id: int = 0) -> Preset:
-        def number(key: str, default: int) -> int:
-            try:
-                return int(form.get(key))
-            except (TypeError, ValueError):
-                return default
+    def _preset_from_form(form: Mapping[str, Any], *, preset_id: int = 0) -> Preset:
+        """Compatibility seam; parsing itself needs no service or database."""
+        return preset_from_form(form, preset_id=preset_id)
 
-        timer_at = str(form.get("at") or "").strip()
-        return Preset(
-            id=preset_id,
-            name=normalize_name(str(form.get("name") or "")),
-            power=number("power", 1),
-            mode=number("mode", 1),
-            temp=number("temp", 24),
-            fan=number("fan", AC_FAN["auto"]),
-            timer_enabled=bool(timer_at),
-            timer_at=timer_at,
-        )
-
-    def _apply_preset(self, preset: Preset, chat_id: str,
-                      message_id: str | None = None) -> str:
+    def _apply_preset(self, preset: Preset, chat_id: str, message_id: str | None = None) -> str:
         """Clicking a preset: run it now, or book it once for later today."""
         when, at = resolve(preset, datetime.now())
         if when == "at" and at is not None:
@@ -757,7 +787,7 @@ class Service:
 
     # -------------------------------------------------------------- settings
 
-    def _setting_map(self) -> dict:
+    def _setting_map(self) -> dict[str, str]:
         return {
             "push_time": self._push_time(),
             "night_start": self._night_start(),
@@ -765,21 +795,15 @@ class Service:
             "night_target": str(self._night_target()),
         }
 
-    def _save_settings_form(self, form, chat_id: str, message_id: str) -> None:
-        if form.get("push_time"):
-            self.store.set_setting(S_PUSH_TIME, str(form["push_time"]).strip())
-        if form.get("night_start"):
-            self.store.set_setting(S_NIGHT_START, str(form["night_start"]).strip())
-        if form.get("night_end"):
-            self.store.set_setting(S_NIGHT_END, str(form["night_end"]).strip())
-        if form.get("night_target"):
-            self.store.set_setting(S_NIGHT_TARGET, str(form["night_target"]).strip())
+    def _save_settings_form(self, form: Mapping[str, Any], chat_id: str, message_id: str) -> None:
+        for key, value in settings_updates(form).items():
+            self.store.set_setting(key, value)
         self._show_settings_card(chat_id, status="✅ 设置已保存", prefer=message_id)
 
     # ------------------------------------------------------------------ weather
 
     #: (WeatherNow, Recommendation) from the last fetch, for the "忽略" patch.
-    _last_weather: tuple = (None, None)
+    _last_weather: tuple[WeatherNow | None, Recommendation | None] = (None, None)
 
     def _room_temp(self) -> int | None:
         """The latest DHT11 temperature, or None when there is none to trust.
@@ -796,47 +820,49 @@ class Service:
             return None
         return reading.temp
 
-    def _weather_snapshot(self) -> tuple:
+    def _weather_snapshot(self) -> tuple[WeatherNow | None, Recommendation | None]:
         """Fetch and judge the weather once. ``(None, None)`` when it fails."""
         now = fetch_now(lat=self.settings.weather_lat, lon=self.settings.weather_lon)
         if now is None:
             return (None, None)
-        return (now, recommend(now.outdoor_c, now.next2h_delta_c,
-                               room_c=self._room_temp()))
+        return (now, recommend(now.outdoor_c, now.next2h_delta_c, room_c=self._room_temp()))
 
     def _execute_weather(self, chat_id: str, message_id: str) -> None:
         now, recommendation = self._last_weather
         if now is None or recommendation is None:
             now, recommendation = self._weather_snapshot()
         if now is None or recommendation is None:
-            self._show_card(CARD_WEATHER, chat_id,
-                            build_weather_card(None, None, status="天气没拿到"),
-                            prefer=message_id)
+            self._show_card(
+                CARD_WEATHER,
+                chat_id,
+                build_weather_card(None, None, status="天气没拿到"),
+                prefer=message_id,
+            )
             return
         if recommendation.skip:
             # The room is already where the table would put it, so the command
             # would set a target the AC then ignores (design Q2c). Say so rather
             # than sending something that looks like it did work.
-            self._show_card(CARD_WEATHER, chat_id,
-                            build_weather_card(now, recommendation,
-                                               status="✅ 室温已合适，不用开"),
-                            prefer=message_id)
+            self._show_card(
+                CARD_WEATHER,
+                chat_id,
+                build_weather_card(now, recommendation, status="✅ 室温已合适，不用开"),
+                prefer=message_id,
+            )
             return
         # "立即执行" means "run this now", so it switches the AC on as well: the
         # suggestion is a target to hold, not a knob to pre-set. Without power
         # the device applied heat/26, sent the IR frame, and the AC stayed off
         # (seen on hardware 2026-10-23). Canonical field order: power, mode,
         # temp (design 5.2/6.4).
-        actions: list[tuple[str, int]] = [("power", 1),
-                                         ("mode", recommendation.mode)]
-        if recommendation.temp_used:
-            actions.append(("temp", recommendation.temp))
-        self._queue_actions(actions)
+        self._queue_actions(weather_actions(recommendation))
         self._yield_to_manual()
-        self._show_card(CARD_WEATHER, chat_id,
-                        build_weather_card(now, recommendation,
-                                           status="✅ 已按建议执行"),
-                        prefer=message_id)
+        self._show_card(
+            CARD_WEATHER,
+            chat_id,
+            build_weather_card(now, recommendation, status="✅ 已按建议执行"),
+            prefer=message_id,
+        )
 
     def _push_weather(self, chat_id: str) -> bool:
         """Send the daily suggestion card; False when the fetch came up empty."""
@@ -845,8 +871,7 @@ class Service:
         if now is None or recommendation is None:
             log.info("weather push skipped: no data")
             return False
-        self._show_card(CARD_WEATHER, chat_id,
-                        build_weather_card(now, recommendation))
+        self._show_card(CARD_WEATHER, chat_id, build_weather_card(now, recommendation))
         return True
 
     # -------------------------------------------------------------------- tick
@@ -897,8 +922,7 @@ class Service:
             # would leave the hourglass on the card for good.
             self._confirm_deadline = time.monotonic() + self.settings.confirm_timeout_s
         if not sent:
-            log.warning("could not publish %s; the card will report it unconfirmed",
-                        commands)
+            log.warning("could not publish %s; the card will report it unconfirmed", commands)
 
     def _begin_pending(self) -> None:
         """Note that a command is on its way, without arming the confirm timer.
@@ -946,14 +970,19 @@ class Service:
             # land in between. Only an armed deadline is allowed to expire, or
             # a click would be reported as "unconfirmed" before it was sent
             # (design 18.12 #1).
-            if (self.pending and self._confirm_deadline
-                    and time.monotonic() > self._confirm_deadline):
+            if (
+                self.pending
+                and self._confirm_deadline
+                and time.monotonic() > self._confirm_deadline
+            ):
                 self.pending = False
                 self.unconfirmed = True
                 changed = True
         if changed:
-            log.warning("no ac/state came back in %.1fs; marking unconfirmed",
-                        self.settings.confirm_timeout_s)
+            log.warning(
+                "no ac/state came back in %.1fs; marking unconfirmed",
+                self.settings.confirm_timeout_s,
+            )
 
     def _record_env(self, now: float) -> None:
         """Append the latest good reading every `dht_record_s` (design §9.1)."""
@@ -988,8 +1017,7 @@ class Service:
         """
         if self.mqtt.connected and not self._mqtt_publish_failed:
             if self._mqtt_down_since:
-                log.warning("mqtt link is back after %.0fs",
-                            now - self._mqtt_down_since)
+                log.warning("mqtt link is back after %.0fs", now - self._mqtt_down_since)
                 if self._mqtt_alerted:
                     self._notify_owner("✅ 与空调网关的连接已恢复")
                 self._mqtt_down_since = 0.0
@@ -1007,7 +1035,7 @@ class Service:
             log.warning("mqtt has been down for %.0fs; re-dialling", waited)
             self._notify_owner("⚠️ 与空调网关的 MQTT 连接已中断，正在自动重连…")
         self.mqtt.restart()
-        self._mqtt_down_since = now        # next attempt one notice-period later
+        self._mqtt_down_since = now  # next attempt one notice-period later
 
     def _notify_owner(self, text: str) -> None:
         """Best-effort owner notice; a failed send is only a log line.
@@ -1046,8 +1074,7 @@ class Service:
         if chat_id:
             # The receipt is a Feishu round trip; the tick must not wait on it
             # either (design 18.15) -- same hand-off as `_notify_owner`.
-            self._run_async(self.feishu.send_text, chat_id,
-                            f"⏰ 已按预约执行「{preset.name}」")
+            self._run_async(self.feishu.send_text, chat_id, f"⏰ 已按预约执行「{preset.name}」")
 
     def _maybe_push_weather(self, now: float) -> None:
         """Push the daily suggestion, retrying a failed fetch (design §9.3).
@@ -1062,15 +1089,15 @@ class Service:
         """
         at = at_today(self._push_time(), datetime.now())
         if at is None or now < at:
-            return                          # no such time today, or not yet
+            return  # no such time today, or not yet
         if now - self._setting_float(S_WEATHER_PUSHED_AT) < 6 * 3600:
-            return                          # this occurrence is already done
+            return  # this occurrence is already done
         if now - at >= _WEATHER_CATCHUP_S:
-            return                          # too late to be worth sending
+            return  # too late to be worth sending
         if now < self._weather_retry_at:
-            return                          # backing off after a failed try
+            return  # backing off after a failed try
         if self._weather_pushing:
-            return                          # the last try is still out there
+            return  # the last try is still out there
 
         chat_id = self._chat_id()
         if not chat_id:
@@ -1113,8 +1140,14 @@ class Service:
             history = [row.temp for row in samples][-6:]
 
         with self._lock:
-            decision = decide(room, target=self._night_target(), ac=self.view,
-                              now=now, state=self._loop, history=history)
+            decision = decide(
+                room,
+                target=self._night_target(),
+                ac=self.view,
+                now=now,
+                state=self._loop,
+                history=history,
+            )
         if not decision.actions:
             return
         log.info("night loop: %s (%s)", decision.actions, decision.reason)
@@ -1134,10 +1167,9 @@ class Service:
         exists to prevent (design 18.16).
         """
         with self._lock:
-            self._loop = replace(self._loop,
-                                 manual_until=time.time() + MANUAL_YIELD_S)
+            self._loop = replace(self._loop, manual_until=time.time() + MANUAL_YIELD_S)
 
-    def _queue_actions(self, actions) -> None:
+    def _queue_actions(self, actions: Sequence[tuple[str, int]]) -> None:
         """Send actions down the one shared path: optimistic view + queue."""
         if not actions:
             return
@@ -1170,8 +1202,9 @@ class Service:
 
     def _night_target(self) -> int:
         try:
-            return int(self.store.get_setting(S_NIGHT_TARGET,
-                                              str(self.settings.night_default_target)))
+            return int(
+                self.store.get_setting(S_NIGHT_TARGET, str(self.settings.night_default_target))
+            )
         except ValueError:
             return self.settings.night_default_target
 
@@ -1212,7 +1245,7 @@ class Service:
             message_id = self.store.get_card(self.settings.owner_open_id, CARD_REMOTE)
 
         if not message_id:
-            return True         # nothing posted yet; the next "设置卡片" creates it
+            return True  # nothing posted yet; the next "设置卡片" creates it
         if self.feishu.patch_card(message_id, card):
             with self._lock:
                 self._rendered[CARD_REMOTE] = serialised
@@ -1258,8 +1291,7 @@ class Service:
             return
         with self._lock:
             self._render_retry_at = time.monotonic() + _RENDER_BACKOFF_S
-        log.warning("card patch failed; the next attempt is %.0fs away",
-                    _RENDER_BACKOFF_S)
+        log.warning("card patch failed; the next attempt is %.0fs away", _RENDER_BACKOFF_S)
 
     def _ensure_card(self, chat_id: str) -> None:
         """Post the remote once, so a text-only user still has something to fix.
@@ -1289,7 +1321,7 @@ class Service:
 
         message_id = self.feishu.send_card(chat_id, card)
         if not message_id:
-            return                      # send failed: keep the old card as-is
+            return  # send failed: keep the old card as-is
         self.store.set_message_id(owner, message_id)
         with self._lock:
             self._rendered[CARD_REMOTE] = serialised

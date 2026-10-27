@@ -2,13 +2,20 @@
 
 日期：2026-10-15
 状态：**定稿 v1（2026-10-15 已批准）**
-关系：本文件是 [`AirConditionRemoteServer/docs/interface-spec.md`](../../Documents/VSCODEF/AirConditionRemoteServer/docs/interface-spec.md)
-与 [`AirConditionRemoteCTL`](../../Documents/VSCODEF/AirConditionRemoteCTL) 固件设计的**增量**，不推翻其任何已定决策
+关系：本文件是 [接口规格](../../interface-spec.md)
+与独立固件项目 `AirConditionRemoteCTL` 设计的**增量**，不依赖本机兄弟目录链接，不推翻其任何已定决策
 （尤其：真值在 ESP32、控制决策在树莓派、所有动作最终走 `ac/cmd` 这一个出口、私聊单用户）。
 涉及两个仓库：服务器 `AirConditionRemoteServer`（Python）+ 固件 `AirConditionRemoteCTL`（ESP32/PlatformIO）。
 
 > 说明：这是**设计文档（What / Why）**，不是实施计划，也不含逐行实现。
 > 文中凡标「**我的判断**」处，是设计者代你做的选择，请重点核对。
+>
+> **2026-10-27 协议核对更正**：下文保留历史设计、验收与复盘原文，包含相互冲突的
+> 中间方案。当前 `event` **不 retained**；QoS 须分别看发布、订阅与遗嘱，
+> 不能用“全是 QoS0 + retained”概括。现行定义及恢复/时间限制以
+> [接口规格 §4](../../interface-spec.md#4-mqtt-契约与固件仓库的唯一接口) 为准。
+> 历史记录中的“5 分钟”不等同所有失联路径的精确截止时间，自动恢复也不保证成功
+> 或最新用户命令优先。本次只更正文档，不改控制策略。
 
 ---
 
@@ -988,4 +995,3 @@ mosquitto 不动**。
   b) 保持重算（更"新鲜"），但执行时**先把卡重画**再说执行，让文案永远指向同一份。
 
   代价：a) 多一行持久化 + 一条测试；b) 只是文案顺序。**等你一句话。**
-

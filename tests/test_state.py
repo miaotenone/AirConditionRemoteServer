@@ -121,12 +121,16 @@ def test_to_command_never_emits_fields_it_does_not_know():
 
 def test_merge_actions_coalesces_repeated_temp_steps():
     # three quick "+" taps from 24 must collapse to ONE command carrying 27
-    payload = merge_actions(AcState(temp=24), [("temp_step", 1), ("temp_step", 1), ("temp_step", 1)])
+    payload = merge_actions(
+        AcState(temp=24), [("temp_step", 1), ("temp_step", 1), ("temp_step", 1)]
+    )
     assert payload == {"temp": 27}
 
 
 def test_merge_actions_clamps_the_coalesced_steps():
-    payload = merge_actions(AcState(temp=29), [("temp_step", 1), ("temp_step", 1), ("temp_step", 1)])
+    payload = merge_actions(
+        AcState(temp=29), [("temp_step", 1), ("temp_step", 1), ("temp_step", 1)]
+    )
     assert payload == {"temp": TEMP_MAX}
 
 

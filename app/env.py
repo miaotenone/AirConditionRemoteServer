@@ -99,9 +99,9 @@ def parse_env(payload: dict) -> EnvReading:
     if not ok:
         return EnvReading(ok=False)
     try:
-        reading = EnvReading(temp=int(temp),
-                             humidity=int(humidity) if humidity is not None else None,
-                             ok=True)
+        reading = EnvReading(
+            temp=int(temp), humidity=int(humidity) if humidity is not None else None, ok=True
+        )
     except (TypeError, ValueError):
         return EnvReading(ok=False)
     if not _plausible(reading.temp, reading.humidity):
@@ -117,13 +117,14 @@ def _night_bounds(now: datetime, start: str, end: str) -> Optional[tuple[float, 
     return night_bounds(now, start, end)
 
 
-def _bounds(window: str, now: datetime, night_start: str,
-            night_end: str) -> Optional[tuple[float, float]]:
+def _bounds(
+    window: str, now: datetime, night_start: str, night_end: str
+) -> Optional[tuple[float, float]]:
     """``(start, end)`` epoch bounds for a window, or ``None`` for "no filter"."""
     if window == "all":
         return None
     if window == "current":
-        return (now.timestamp(), now.timestamp())      # latest only, handled below
+        return (now.timestamp(), now.timestamp())  # latest only, handled below
     if window == "tonight":
         return _night_bounds(now, night_start, night_end)
     if window == "day":
@@ -134,21 +135,34 @@ def _bounds(window: str, now: datetime, night_start: str,
     return None
 
 
-def aggregate(samples: list[EnvSample], *, now: datetime, window: str = "current",
-              night_start: str = "", night_end: str = "") -> Summary:
+def aggregate(
+    samples: list[EnvSample],
+    *,
+    now: datetime,
+    window: str = "current",
+    night_start: str = "",
+    night_end: str = "",
+) -> Summary:
     """Summarise the samples in ``window``, ignoring failed reads."""
-    selected = _select(samples, now=now, window=window,
-                       night_start=night_start, night_end=night_end)
+    selected = _select(
+        samples, now=now, window=window, night_start=night_start, night_end=night_end
+    )
     if not selected:
         return Summary(window=window)
 
     if window == "current":
         latest = selected[0]
-        return Summary(window=window, count=1, latest=latest,
-                       temp_min=latest.temp, temp_max=latest.temp,
-                       temp_avg=float(latest.temp),
-                       humidity_min=latest.humidity, humidity_max=latest.humidity,
-                       humidity_avg=float(latest.humidity) if latest.humidity is not None else None)
+        return Summary(
+            window=window,
+            count=1,
+            latest=latest,
+            temp_min=latest.temp,
+            temp_max=latest.temp,
+            temp_avg=float(latest.temp),
+            humidity_min=latest.humidity,
+            humidity_max=latest.humidity,
+            humidity_avg=float(latest.humidity) if latest.humidity is not None else None,
+        )
 
     temps = [row.temp for row in selected]
     humidities = [row.humidity for row in selected if row.humidity is not None]
@@ -156,7 +170,9 @@ def aggregate(samples: list[EnvSample], *, now: datetime, window: str = "current
         window=window,
         count=len(selected),
         latest=max(selected, key=lambda row: row.at),
-        temp_min=min(temps), temp_max=max(temps), temp_avg=sum(temps) / len(temps),
+        temp_min=min(temps),
+        temp_max=max(temps),
+        temp_avg=sum(temps) / len(temps),
         humidity_min=min(humidities) if humidities else None,
         humidity_max=max(humidities) if humidities else None,
         humidity_avg=(sum(humidities) / len(humidities)) if humidities else None,
@@ -173,8 +189,9 @@ def aggregate(samples: list[EnvSample], *, now: datetime, window: str = "current
 CHART_POINTS = 48
 
 
-def _select(samples: list[EnvSample], *, now: datetime, window: str,
-            night_start: str, night_end: str) -> list[EnvSample]:
+def _select(
+    samples: list[EnvSample], *, now: datetime, window: str, night_start: str, night_end: str
+) -> list[EnvSample]:
     """The readings a window covers -- the one place text and chart agree.
 
     Shared by `aggregate` and `chart_points` so the picture can never show a
@@ -192,34 +209,43 @@ def _select(samples: list[EnvSample], *, now: datetime, window: str,
     return [row for row in good if start <= row.at <= end]
 
 
-def chart_points(samples: list[EnvSample], *, now: datetime, window: str = "day",
-                 night_start: str = "", night_end: str = "",
-                 max_points: int = CHART_POINTS) -> tuple[ChartPoint, ...]:
+def chart_points(
+    samples: list[EnvSample],
+    *,
+    now: datetime,
+    window: str = "day",
+    night_start: str = "",
+    night_end: str = "",
+    max_points: int = CHART_POINTS,
+) -> tuple[ChartPoint, ...]:
     """Downsample one window into at most ``max_points`` averaged buckets.
 
     A bucket nobody measured in is skipped, never filled: the chart must not
     draw a temperature that was not read (design 18.6).
     """
-    selected = sorted(_select(samples, now=now, window=window,
-                              night_start=night_start, night_end=night_end),
-                      key=lambda row: row.at)
+    selected = sorted(
+        _select(samples, now=now, window=window, night_start=night_start, night_end=night_end),
+        key=lambda row: row.at,
+    )
     if not selected:
         return ()
     if len(selected) <= max_points:
-        return tuple(ChartPoint(at=row.at, temp=row.temp, humidity=row.humidity)
-                     for row in selected)
+        return tuple(
+            ChartPoint(at=row.at, temp=row.temp, humidity=row.humidity) for row in selected
+        )
 
     first, last = selected[0].at, selected[-1].at
     width = (last - first) / max_points
-    if width <= 0:                       # every reading at the same instant
+    if width <= 0:  # every reading at the same instant
         return (_average(selected, at=first),)
 
     buckets: dict[int, list[EnvSample]] = {}
     for row in selected:
         index = min(int((row.at - first) / width), max_points - 1)
         buckets.setdefault(index, []).append(row)
-    return tuple(_average(buckets[index], at=first + (index + 0.5) * width)
-                 for index in sorted(buckets))
+    return tuple(
+        _average(buckets[index], at=first + (index + 0.5) * width) for index in sorted(buckets)
+    )
 
 
 def _average(group: list[EnvSample], *, at: float) -> ChartPoint:

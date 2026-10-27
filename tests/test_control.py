@@ -58,13 +58,11 @@ def test_the_loop_yields_to_a_manual_command():
 
 def test_a_room_already_falling_is_left_to_finish():
     # 已经降了 2℃，再开就是过冲（DHT11 只有 1℃ 分辨率，过冲会看得见）。
-    assert decide(28, target=26, ac=cooling(), now=NOW,
-                  history=[30, 29, 28]).actions == ()
+    assert decide(28, target=26, ac=cooling(), now=NOW, history=[30, 29, 28]).actions == ()
 
 
 def test_a_forecast_cold_snap_holds_the_loop_back():
-    assert decide(28, target=26, ac=cooling(), now=NOW,
-                  forecast_delta=-2).actions == ()
+    assert decide(28, target=26, ac=cooling(), now=NOW, forecast_delta=-2).actions == ()
 
 
 def test_heating_mode_wakes_a_cold_room():

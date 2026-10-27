@@ -148,8 +148,7 @@ def test_a_preset_is_updated_by_id():
 
 def test_a_preset_keeps_its_timer():
     store = CardStore(":memory:")
-    preset_id = store.save_preset(
-        Preset(name="睡觉", timer_enabled=True, timer_at="22:30"))
+    preset_id = store.save_preset(Preset(name="睡觉", timer_enabled=True, timer_at="22:30"))
     got = store.get_preset(preset_id)
     assert got.timer_enabled is True
     assert got.timer_at == "22:30"

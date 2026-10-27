@@ -31,8 +31,9 @@ from typing import Callable, Literal
 
 from .preset import NAME_MAX
 
-Kind = Literal["actions", "query", "help", "unclear", "suggest",
-               "history", "night", "weather", "preset"]
+Kind = Literal[
+    "actions", "query", "help", "unclear", "suggest", "history", "night", "weather", "preset"
+]
 
 #: Canonical order of the actions in an Intent (design 4.3).
 FIELD_ORDER = ("power", "mode", "temp", "fan")
@@ -40,12 +41,22 @@ FIELD_ORDER = ("power", "mode", "temp", "fan")
 #: Modes the AC has, as words (design 4.2). The English names are the ones
 #: printed on the unit's own panel, so they are recognised too (design 4.1).
 _MODE_WORDS = {
-    "制冷": 1, "冷风": 1,
-    "除湿": 2, "抽湿": 2,
-    "送风": 3, "吹风": 3,
-    "制热": 4, "暖风": 4, "热风": 4, "加热": 4,
+    "制冷": 1,
+    "冷风": 1,
+    "除湿": 2,
+    "抽湿": 2,
+    "送风": 3,
+    "吹风": 3,
+    "制热": 4,
+    "暖风": 4,
+    "热风": 4,
+    "加热": 4,
     "自动": 0,
-    "cool": 1, "dry": 2, "fan": 3, "heat": 4, "auto": 0,
+    "cool": 1,
+    "dry": 2,
+    "fan": 3,
+    "heat": 4,
+    "auto": 0,
 }
 
 #: Fan steps, expressed as "风速<level>", "<level>风" or "<level>档".
@@ -87,13 +98,18 @@ _HELP_WORDS = ("帮助", "怎么用", "能做什么", "指令", "help")
 #: branch because "夜间状态" contains "状态".
 #: 历史：`历史` is the menu entry the design puts under 其他; the five window
 #: words are the individual views.
-_HISTORY_WORDS = {"当前": "current", "今夜": "tonight", "一天": "day",
-                  "一周": "week", "全部": "all", "历史": "day"}
+_HISTORY_WORDS = {
+    "当前": "current",
+    "今夜": "tonight",
+    "一天": "day",
+    "一周": "week",
+    "全部": "all",
+    "历史": "day",
+}
 #: `夜间` (the design's 其他 ▸ 夜间 menu entry) opens the settings card;
 #: `夜间状态` only reports. A bare word cannot say on or off, so it must not
 #: toggle -- the destructive reading of an ambiguous word is the wrong guess.
-_NIGHT_WORDS = {"开夜间": "on", "关夜间": "off", "夜间状态": "status",
-                "夜间": "open"}
+_NIGHT_WORDS = {"开夜间": "on", "关夜间": "off", "夜间状态": "status", "夜间": "open"}
 _WEATHER_WORDS = ("天气", "今天天气", "建议", "今天开多少度")
 _PRESET_OPEN_WORDS = ("预设", "设置预设")
 #: Applying a preset by text needs a verb: a bare name must never move the AC.
@@ -127,13 +143,33 @@ _UNIT = r"(?:度|°c)"
 #: temperature ("调到2档" is not "调到2度").
 _NOT_A_WIND_UNIT = r"(?!档|档位|风)"
 
-_CN_SINGLE = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
-              "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+_CN_SINGLE = {
+    "一": 1,
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+    "十": 10,
+}
 
 #: Direction words for a relative change, and which way they move the setpoint.
 _DIRECTION = {
-    "调低": -1, "降": -1, "低": -1, "凉快": -1, "冷": -1, "凉": -1,
-    "调高": 1, "升": 1, "高": 1, "暖": 1, "热": 1,
+    "调低": -1,
+    "降": -1,
+    "低": -1,
+    "凉快": -1,
+    "冷": -1,
+    "凉": -1,
+    "调高": 1,
+    "升": 1,
+    "高": 1,
+    "暖": 1,
+    "热": 1,
 }
 #: "调低" already means "one step down" on its own, and cannot be confused with
 #: anything else. The single characters can: "血压高140" is not a command.
@@ -197,7 +233,7 @@ class _Rule:
     """
 
     pattern: re.Pattern
-    field: str          # the canonical field it owns; "temp" covers temp_step too
+    field: str  # the canonical field it owns; "temp" covers temp_step too
     priority: int
     build: Callable[[re.Match], tuple[tuple[str, str, int], ...]]
     requires: str | None = None
@@ -230,12 +266,17 @@ def _alternation(words) -> str:
     return "|".join(sorted(words, key=lambda word: (-len(word), word)))
 
 
-def _static(text: str, field: str, action: str, value: int, *,
-            needs_context: bool = False) -> _Rule:
+def _static(
+    text: str, field: str, action: str, value: int, *, needs_context: bool = False
+) -> _Rule:
     writes = ((field, action, value),)
-    return _Rule(re.compile(re.escape(text)), field,
-                 _RULE_TIE_BREAK.get(field, 0), lambda _match: writes,
-                 needs_context=needs_context)
+    return _Rule(
+        re.compile(re.escape(text)),
+        field,
+        _RULE_TIE_BREAK.get(field, 0),
+        lambda _match: writes,
+        needs_context=needs_context,
+    )
 
 
 def _build_rules() -> tuple[_Rule, ...]:
@@ -252,29 +293,45 @@ def _build_rules() -> tuple[_Rule, ...]:
     power_first = _RULE_TIE_BREAK["power"] + 10
     # "开到 26" reads as power *and* setpoint; the following `开` in the power
     # table must not fire again, which is why this consumes the whole span.
-    rules.append(_Rule(
-        re.compile(rf"(?:开到|开成)(?P<num>{_NUMBER}){_UNIT}?{_NOT_A_WIND_UNIT}"),
-        "power", power_first, kaidao))
+    rules.append(
+        _Rule(
+            re.compile(rf"(?:开到|开成)(?P<num>{_NUMBER}){_UNIT}?{_NOT_A_WIND_UNIT}"),
+            "power",
+            power_first,
+            kaidao,
+        )
+    )
     # "开到2档" is a fan step, not a temperature of 2.
-    rules.append(_Rule(
-        re.compile(r"(?:开到|开成)(?P<step>[0-3])(?:档位|档|风)"),
-        "power", power_first, kaidao_fan))
+    rules.append(
+        _Rule(
+            re.compile(r"(?:开到|开成)(?P<step>[0-3])(?:档位|档|风)"),
+            "power",
+            power_first,
+            kaidao_fan,
+        )
+    )
 
     def absolute(match: re.Match) -> tuple[tuple[str, str, int], ...]:
         return (("temp", "temp", _to_int(match.group("num"))),)
 
-    rules.append(_Rule(
-        re.compile(
-            rf"(?:调到|设成|设置成|设到|温度|调成)"
-            rf"(?P<num>{_NUMBER}){_UNIT}?{_NOT_A_WIND_UNIT}"),
-        "temp", _RULE_TIE_BREAK["temp"], absolute))
-    rules.append(_Rule(
-        re.compile(rf"(?P<num>{_NUMBER}){_UNIT}"),
-        "temp", _RULE_TIE_BREAK["temp"], absolute))
+    rules.append(
+        _Rule(
+            re.compile(
+                rf"(?:调到|设成|设置成|设到|温度|调成)"
+                rf"(?P<num>{_NUMBER}){_UNIT}?{_NOT_A_WIND_UNIT}"
+            ),
+            "temp",
+            _RULE_TIE_BREAK["temp"],
+            absolute,
+        )
+    )
+    rules.append(
+        _Rule(re.compile(rf"(?P<num>{_NUMBER}){_UNIT}"), "temp", _RULE_TIE_BREAK["temp"], absolute)
+    )
 
     def relative(match: re.Match) -> tuple[tuple[str, str, int], ...]:
         if match.group("one") is not None:
-            step = 1                                 # "一点" / "一会儿"
+            step = 1  # "一点" / "一会儿"
         else:
             token = match.group("num")
             step = 1 if token is None else _to_int(token)
@@ -282,25 +339,43 @@ def _build_rules() -> tuple[_Rule, ...]:
         return (("temp", "temp_step", sign * step),)
 
     # Unambiguous verbs: "调低" on its own is already one step down.
-    rules.append(_Rule(
-        re.compile(rf"(?P<dir>{_alternation(_UNAMBIGUOUS_DIRECTIONS)})"
-                   rf"(?:(?P<one>一点)|(?P<num>{_NUMBER}))?{_UNIT}?"),
-        "temp", _RULE_TIE_BREAK["temp"], relative))
+    rules.append(
+        _Rule(
+            re.compile(
+                rf"(?P<dir>{_alternation(_UNAMBIGUOUS_DIRECTIONS)})"
+                rf"(?:(?P<one>一点)|(?P<num>{_NUMBER}))?{_UNIT}?"
+            ),
+            "temp",
+            _RULE_TIE_BREAK["temp"],
+            relative,
+        )
+    )
     # Everything else needs a measure word, or any sentence with a number near
     # "高"/"热" becomes a setpoint change.
     single_dirs = [word for word in _DIRECTION if word not in _UNAMBIGUOUS_DIRECTIONS]
-    rules.append(_Rule(
-        re.compile(rf"(?P<dir>{_alternation(single_dirs)})"
-                   rf"(?:(?P<one>一点)|(?P<num>{_NUMBER}){_UNIT})"),
-        "temp", _RULE_TIE_BREAK["temp"], relative))
+    rules.append(
+        _Rule(
+            re.compile(
+                rf"(?P<dir>{_alternation(single_dirs)})"
+                rf"(?:(?P<one>一点)|(?P<num>{_NUMBER}){_UNIT})"
+            ),
+            "temp",
+            _RULE_TIE_BREAK["temp"],
+            relative,
+        )
+    )
 
     # A bare number only means a temperature once the sentence has already
     # established one ("调到24，算了26" -> 26, but "2" alone -> nothing).
-    rules.append(_Rule(
-        re.compile(rf"(?P<num>{_DIGITS})"),
-        "temp", _BARE_NUMBER_PRIORITY,
-        lambda match: (("temp", "temp", int(match.group("num"))),),
-        requires="temp"))
+    rules.append(
+        _Rule(
+            re.compile(rf"(?P<num>{_DIGITS})"),
+            "temp",
+            _BARE_NUMBER_PRIORITY,
+            lambda match: (("temp", "temp", int(match.group("num"))),),
+            requires="temp",
+        )
+    )
 
     # -- mode / fan / power words -------------------------------------------
     for word, value in _MODE_WORDS.items():
@@ -315,17 +390,15 @@ def _build_rules() -> tuple[_Rule, ...]:
     def fan_step(match: re.Match) -> tuple[tuple[str, str, int], ...]:
         return (("fan", "fan", int(match.group("step"))),)
 
-    rules.append(_Rule(re.compile(r"风速(?P<step>[0-3])"),
-                       "fan", _RULE_TIE_BREAK["fan"], fan_step))
-    rules.append(_Rule(re.compile(r"(?P<step>[0-3])(?:档位|档|风)"),
-                       "fan", _RULE_TIE_BREAK["fan"], fan_step))
+    rules.append(_Rule(re.compile(r"风速(?P<step>[0-3])"), "fan", _RULE_TIE_BREAK["fan"], fan_step))
+    rules.append(
+        _Rule(re.compile(r"(?P<step>[0-3])(?:档位|档|风)"), "fan", _RULE_TIE_BREAK["fan"], fan_step)
+    )
 
     for word in _POWER_ON_WORDS:
-        rules.append(_static(word, "power", "power", 1,
-                             needs_context=word in _NEEDS_AC_CONTEXT))
+        rules.append(_static(word, "power", "power", 1, needs_context=word in _NEEDS_AC_CONTEXT))
     for word in _POWER_OFF_WORDS:
-        rules.append(_static(word, "power", "power", 0,
-                             needs_context=word in _NEEDS_AC_CONTEXT))
+        rules.append(_static(word, "power", "power", 0, needs_context=word in _NEEDS_AC_CONTEXT))
 
     return tuple(rules)
 
@@ -336,8 +409,7 @@ _RULES = _build_rules()
 # ------------------------------------------------------------------------ parse
 
 
-def _context_word_fits(text: str, match: re.Match,
-                       found: dict[str, tuple[str, int]]) -> bool:
+def _context_word_fits(text: str, match: re.Match, found: dict[str, tuple[str, int]]) -> bool:
     """May this short, ambiguous power word be read as a command?
 
     Two ways to earn it:
@@ -352,8 +424,8 @@ def _context_word_fits(text: str, match: re.Match,
     "打开心扉", "雨停了". These words are far too easy to hit by accident for
     anything looser, and the cost of being wrong is a physical machine.
     """
-    head = text[:match.start()]
-    tail = text[match.end():]
+    head = text[: match.start()]
+    tail = text[match.end() :]
     if head in _COMMAND_PREFIXES:
         if all(char in _TRAILING_PARTICLES for char in tail):
             return True
@@ -363,8 +435,9 @@ def _context_word_fits(text: str, match: re.Match,
     return following is not None and following[0].field != "power"
 
 
-def _best_rule_at(text: str, index: int, found: dict[str, tuple[str, int]],
-                  *, allow_context: bool = True) -> tuple[_Rule, re.Match, int] | None:
+def _best_rule_at(
+    text: str, index: int, found: dict[str, tuple[str, int]], *, allow_context: bool = True
+) -> tuple[_Rule, re.Match, int] | None:
     """The longest rule matching at `index`, ties broken by priority."""
     best: _Rule | None = None
     best_match: re.Match | None = None
@@ -474,7 +547,7 @@ def _exact_intent(clean: str) -> Intent | None:
         return Intent(kind="preset", hint="open")
     for prefix in _PRESET_APPLY_PREFIXES:
         if clean.startswith(prefix):
-            name = clean[len(prefix):]
+            name = clean[len(prefix) :]
             if 0 < len(name) <= NAME_MAX:
                 return Intent(kind="preset", hint=f"apply:{name}")
     return None

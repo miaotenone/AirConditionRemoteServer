@@ -199,8 +199,18 @@ def test_low_two_degrees_without_the_diao_prefix():
 def test_chat_that_merely_contains_a_power_character_is_not_a_command():
     # 反目标 1.4（随便说句话就把空调动了）。裸「开/关/停」只有当整句以它收尾
     # （可带语气词），或后面紧跟一个真动作时才算命令。
-    for text in ("没关系", "开心", "开始吧", "开门", "关灯", "停车",
-                 "开关灯", "关注一下", "开个玩笑", "关灯吧啦"):
+    for text in (
+        "没关系",
+        "开心",
+        "开始吧",
+        "开门",
+        "关灯",
+        "停车",
+        "开关灯",
+        "关注一下",
+        "开个玩笑",
+        "关灯吧啦",
+    ):
         assert parse(text).kind == "unclear", text
         assert parse(text).actions == (), text
 
@@ -264,7 +274,10 @@ def test_a_temp_verb_does_not_swallow_a_fan_step():
     assert parse("调到2档").actions == (("fan", 2),)
     assert parse("设成2档").actions == (("fan", 2),)
     assert parse("风速调到2档").actions == (("fan", 2),)
-    assert parse("开到2档").actions == (("power", 1), ("fan", 2),)
+    assert parse("开到2档").actions == (
+        ("power", 1),
+        ("fan", 2),
+    )
 
 
 def test_a_polite_command_is_still_a_command():
@@ -283,8 +296,13 @@ def test_a_polite_command_is_still_a_command():
 
 
 def test_history_windows_are_recognised():
-    for word, window in (("当前", "current"), ("今夜", "tonight"), ("一天", "day"),
-                         ("一周", "week"), ("全部", "all")):
+    for word, window in (
+        ("当前", "current"),
+        ("今夜", "tonight"),
+        ("一天", "day"),
+        ("一周", "week"),
+        ("全部", "all"),
+    ):
         intent = parse(word)
         assert (intent.kind, intent.hint) == ("history", window), word
 

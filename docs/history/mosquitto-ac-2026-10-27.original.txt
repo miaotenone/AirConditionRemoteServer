@@ -1,0 +1,23 @@
+# /etc/mosquitto/conf.d/ac.conf
+#
+# MQTT broker for the AirConditionRemoteCTL gateway.
+# Runs on the same Raspberry Pi as the Feishu service (see docs/interface-spec.md).
+#
+# Apply:
+#   sudo cp deploy/mosquitto-ac.conf /etc/mosquitto/conf.d/ac.conf
+#   sudo systemctl restart mosquitto
+#
+# WARNING -- do NOT add `persistence` / `persistence_location` here.
+# Ubuntu's /etc/mosquitto/mosquitto.conf already sets both, and mosquitto 2.0
+# treats the duplicate as a FATAL config error:
+#   Error: Duplicate persistence_location value in configuration.
+#   Error found at /etc/mosquitto/conf.d/ac.conf:5.
+# (Cost us one debugging round; leaving the note so nobody repeats it.)
+
+# Bind on all interfaces so the ESP32 on the LAN can reach the broker.
+listener 1883 0.0.0.0
+
+# v1: LAN-only trust. To tighten later, set this to false and add:
+#   password_file /etc/mosquitto/passwd
+#   acl_file      /etc/mosquitto/acl
+allow_anonymous true

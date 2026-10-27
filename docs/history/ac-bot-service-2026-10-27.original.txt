@@ -1,0 +1,65 @@
+# /etc/systemd/system/ac-bot.service
+#
+# The Feishu <-> ESP32 bridge as a service. See docs/interface-spec.md section 8
+# and docs/feishu-setup.md for the whole deployment.
+#
+# Install on the Pi (as the account `dirj`, whose home is /home/dirj):
+#   mkdir -p ~/project && cd ~/project
+#   git clone git@github.com:miaotenone/AirConditionRemoteServer.git   # private repo: needs a key/PAT
+#   cd AirConditionRemoteServer
+#   uv sync           # versions come from uv.lock (or: python3 -m venv .venv && pip install -e .)
+#   cp .env.example .env && $EDITOR .env
+#   sudo cp deploy/ac-bot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now ac-bot
+#   journalctl -u ac-bot -f
+#
+# NOTE: runs as the normal account `dirj` (uid 1000), NOT root. The spec drafted
+# `User=pi`, but this Pi has no `pi` user -- `dirj` is the only human account.
+# It is already in the `sudo`, `gpio`, `i2c` and `dialout` groups.
+#
+# NOTE: the checkout is a git clone under dirj's home (~/project/<repo>) and the
+# virtualenv is uv-managed. The SQLite state deliberately lives outside the
+# checkout, in /var/lib/ac-bot (see DB_PATH below), so a redeploy or a `git pull`
+# can never lose the card mapping, the presets or the env_history samples.
+
+[Unit]
+Description=Feishu <-> ESP32 AC gateway bridge
+After=network-online.target mosquitto.service
+Wants=network-online.target
+# The bot is useless without the local broker, so tie them together.
+Requires=mosquitto.service
+# ...and follow it, not merely depend on it. `Requires=` propagates a *stop*
+# (a broker shutdown takes the bot down) but nothing brings the bot back, so
+# bouncing mosquitto used to leave the bridge dead: no heartbeat, and five
+# minutes later the device's fail-safe switches the AC off with no warning.
+# `PartOf=` propagates restarts as well, so `systemctl restart mosquitto`
+# brings the bridge back with it.
+PartOf=mosquitto.service
+
+[Service]
+Type=simple
+User=dirj
+Group=dirj
+WorkingDirectory=/home/dirj/project/AirConditionRemoteServer
+EnvironmentFile=/home/dirj/project/AirConditionRemoteServer/.env
+# Keep the SQLite card mapping out of the checkout so redeploys cannot lose it.
+StateDirectory=ac-bot
+StateDirectoryMode=0750
+Environment=DB_PATH=/var/lib/ac-bot/ac-bot.sqlite3
+ExecStart=/home/dirj/project/AirConditionRemoteServer/.venv/bin/python -m app.main
+Restart=always
+RestartSec=5
+
+# One tiny process talking to the LAN broker and open.feishu.cn. Keep it tidy.
+NoNewPrivileges=true
+PrivateTmp=true
+Nice=5
+
+[Install]
+WantedBy=multi-user.target
+# ...and be pulled up by the broker starting, which is the half neither
+# `Requires=` nor `PartOf=` covers: `systemctl stop mosquitto` followed later by
+# `systemctl start mosquitto` leaves the requiring unit down unless something
+# wants it. With this, starting the broker starts the bridge.
+WantedBy=mosquitto.service

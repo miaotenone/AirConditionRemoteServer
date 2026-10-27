@@ -56,10 +56,16 @@ TextHandler = Callable[[str, str, str, str], None]
 class FeishuClient:
     """Sends/patches the card over OpenAPI and receives events over the socket."""
 
-    def __init__(self, *, app_id: str, app_secret: str,
-                 on_action: Optional[ActionHandler] = None,
-                 on_text: Optional[TextHandler] = None,
-                 log_level: str = "INFO", timeout_s: float = 5.0) -> None:
+    def __init__(
+        self,
+        *,
+        app_id: str,
+        app_secret: str,
+        on_action: Optional[ActionHandler] = None,
+        on_text: Optional[TextHandler] = None,
+        log_level: str = "INFO",
+        timeout_s: float = 5.0,
+    ) -> None:
         self._app_id = app_id
         self._app_secret = app_secret
         self.on_action = on_action
@@ -69,10 +75,9 @@ class FeishuClient:
         #: retries once -- a minute of a thread per failed card update, which is
         #: how a dead internet kept the heartbeat from going out (design 18.15).
         self._timeout_s = timeout_s
-        self._api = (lark.Client.builder()
-                     .app_id(app_id).app_secret(app_secret)
-                     .timeout(timeout_s)
-                     .build())
+        self._api = (
+            lark.Client.builder().app_id(app_id).app_secret(app_secret).timeout(timeout_s).build()
+        )
         self._thread: Optional[threading.Thread] = None
 
     #: Tries per OpenAPI call. Spec §10 asks for one retry; the second attempt
@@ -95,10 +100,8 @@ class FeishuClient:
                 return invoke()
             except Exception as exc:  # noqa: BLE001 - a failed API call is data
                 error = exc
-                log.warning("%s raised on attempt %d/%d: %s",
-                            what, attempt, self._ATTEMPTS, exc)
-        log.error("%s failed after %d attempts", what, self._ATTEMPTS,
-                  exc_info=error)
+                log.warning("%s raised on attempt %d/%d: %s", what, attempt, self._ATTEMPTS, exc)
+        log.error("%s failed after %d attempts", what, self._ATTEMPTS, exc_info=error)
         return None
 
     # ---------------------------------------------------------------- outbound
@@ -117,8 +120,7 @@ class FeishuClient:
             )
             .build()
         )
-        response = self._call("send_card",
-                              lambda: self._api.im.v1.message.create(request))
+        response = self._call("send_card", lambda: self._api.im.v1.message.create(request))
         if response is None:
             return None
         if not response.success():
@@ -134,8 +136,7 @@ class FeishuClient:
             .request_body(PatchMessageRequestBody.builder().content(_dump(card)).build())
             .build()
         )
-        response = self._call("patch_card",
-                              lambda: self._api.im.v1.message.patch(request))
+        response = self._call("patch_card", lambda: self._api.im.v1.message.patch(request))
         if response is None:
             return False
         if not response.success():
@@ -151,8 +152,7 @@ class FeishuClient:
         old card to a one-line notice instead (design D22).
         """
         request = DeleteMessageRequest.builder().message_id(message_id).build()
-        response = self._call("recall_card",
-                              lambda: self._api.im.v1.message.delete(request))
+        response = self._call("recall_card", lambda: self._api.im.v1.message.delete(request))
         if response is None:
             return False
         if not response.success():
@@ -171,15 +171,11 @@ class FeishuClient:
             ReplyMessageRequest.builder()
             .message_id(message_id)
             .request_body(
-                ReplyMessageRequestBody.builder()
-                .msg_type("text")
-                .content(_dump_text(text))
-                .build()
+                ReplyMessageRequestBody.builder().msg_type("text").content(_dump_text(text)).build()
             )
             .build()
         )
-        response = self._call("reply_text",
-                              lambda: self._api.im.v1.message.reply(request))
+        response = self._call("reply_text", lambda: self._api.im.v1.message.reply(request))
         if response is None:
             return False
         if not response.success():
@@ -205,8 +201,7 @@ class FeishuClient:
             )
             .build()
         )
-        response = self._call("send_text",
-                              lambda: self._api.im.v1.message.create(request))
+        response = self._call("send_text", lambda: self._api.im.v1.message.create(request))
         if response is None:
             return False
         if not response.success():
@@ -246,29 +241,42 @@ class FeishuClient:
             # shape turned a tap into an all-empty no-op that the service then
             # dropped as a non-owner event. Try every known shape, and say so
             # loudly when none of them fits.
-            roots = [root for root in (_get(data, "event", None), data)
-                     if root is not None]
+            roots = [root for root in (_get(data, "event", None), data) if root is not None]
             operator = _pick(roots, ("operator", "open_id"), ("open_id",)) or ""
-            chat_id = _pick(roots, ("context", "open_chat_id"),
-                            ("open_chat_id",), ("chat_id",)) or ""
-            message_id = _pick(roots, ("context", "open_message_id"),
-                               ("open_message_id",), ("message_id",)) or ""
+            chat_id = (
+                _pick(roots, ("context", "open_chat_id"), ("open_chat_id",), ("chat_id",)) or ""
+            )
+            message_id = (
+                _pick(roots, ("context", "open_message_id"), ("open_message_id",), ("message_id",))
+                or ""
+            )
             raw_value = _pick(roots, ("action", "value"), ("value",))
             raw_option = _pick(roots, ("action", "option"), ("option",))
             # A `form_submit` button reports its fields here, keyed by the
             # element `name` (design 18.3).
             raw_form = _pick(roots, ("action", "form_value"), ("form_value",))
             card_name = _pick(roots, ("action", "name"), ("name",))
-            log.info("card action from %s: value=%r option=%r form=%r name=%r",
-                     operator, raw_value, raw_option, raw_form, card_name)
-            if not operator and not chat_id and not message_id \
-                    and raw_value is None and raw_option is None \
-                    and raw_form is None:
-                log.warning("card action payload matched no known shape: %s",
-                            _payload(data))
+            log.info(
+                "card action from %s: value=%r option=%r form=%r name=%r",
+                operator,
+                raw_value,
+                raw_option,
+                raw_form,
+                card_name,
+            )
+            if (
+                not operator
+                and not chat_id
+                and not message_id
+                and raw_value is None
+                and raw_option is None
+                and raw_form is None
+            ):
+                log.warning("card action payload matched no known shape: %s", _payload(data))
             if self.on_action:
-                self.on_action(operator, chat_id, message_id, raw_value,
-                               raw_option, raw_form, card_name)
+                self.on_action(
+                    operator, chat_id, message_id, raw_value, raw_option, raw_form, card_name
+                )
         except Exception:  # noqa: BLE001 - never let a handler kill the socket
             log.exception("card action handler failed")
         # An empty response simply acknowledges the click well inside the 3 s

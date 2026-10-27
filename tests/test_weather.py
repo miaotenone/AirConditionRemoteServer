@@ -10,7 +10,7 @@ decision is unit tested from a fixed payload.
 """
 
 from app import weather
-from app.state import AC_FAN, AC_MODE
+from app.state import AC_MODE
 from app.weather import WeatherNow, parse_open_meteo, recommend
 
 COOL, FAN, HEAT = AC_MODE["cool"], AC_MODE["fan"], AC_MODE["heat"]
@@ -66,16 +66,14 @@ def test_the_nudge_never_leaves_the_legal_range():
 def test_parse_open_meteo_reads_current_and_the_two_hour_ahead_hourly():
     payload = {
         "current": {"temperature_2m": 30.0, "relative_humidity_2m": 61},
-        "hourly": {"time": ["t0", "t1", "t2"],
-                   "temperature_2m": [30.0, 29.0, 26.0]},
+        "hourly": {"time": ["t0", "t1", "t2"], "temperature_2m": [30.0, 29.0, 26.0]},
     }
     now = parse_open_meteo(payload)
     assert now == WeatherNow(outdoor_c=30, humidity=61, next2h_delta_c=-4)
 
 
 def test_parse_open_meteo_survives_a_short_hourly_series():
-    payload = {"current": {"temperature_2m": 30.0},
-               "hourly": {"temperature_2m": [30.0]}}
+    payload = {"current": {"temperature_2m": 30.0}, "hourly": {"temperature_2m": [30.0]}}
     now = parse_open_meteo(payload)
     assert now.next2h_delta_c == 0
     assert now.humidity is None
@@ -92,8 +90,9 @@ def test_parse_open_meteo_returns_none_without_a_current_temperature():
 
 
 def test_geolocate_reads_the_first_providers_latitude_longitude(monkeypatch):
-    monkeypatch.setattr(weather, "_get_json",
-                        lambda url, timeout: {"latitude": 22.5, "longitude": 114.0})
+    monkeypatch.setattr(
+        weather, "_get_json", lambda url, timeout: {"latitude": 22.5, "longitude": 114.0}
+    )
     assert weather.geolocate() == (22.5, 114.0)
 
 
@@ -112,8 +111,7 @@ def test_geolocate_falls_back_when_a_provider_breaks(monkeypatch):
 
 
 def test_geolocate_reads_a_comma_separated_loc_too(monkeypatch):
-    monkeypatch.setattr(weather, "_get_json",
-                        lambda url, timeout: {"loc": "1.5,2.5"})
+    monkeypatch.setattr(weather, "_get_json", lambda url, timeout: {"loc": "1.5,2.5"})
     assert weather.geolocate() == (1.5, 2.5)
 
 
@@ -136,7 +134,7 @@ def test_geolocate_gives_up_when_every_provider_fails(monkeypatch):
 def test_the_room_is_named_when_it_is_known():
     rec = recommend(36, 0, room_c=30)
     assert "室温 30℃" in rec.note
-    assert rec.temp == 26            # a real gap to close: the table stands
+    assert rec.temp == 26  # a real gap to close: the table stands
     assert rec.skip is False
 
 
@@ -151,7 +149,7 @@ def test_a_heat_target_below_the_room_is_lifted_to_the_near_side():
     # 用户报的那一张：室外 16℃、室温 23℃，「建议制热 20℃」比房间还冷。
     rec = recommend(16, 0, room_c=23)
     assert rec.mode == HEAT
-    assert rec.temp == 25            # 室温 + 2，这回是真的要把它加热
+    assert rec.temp == 25  # 室温 + 2，这回是真的要把它加热
     assert "室温 23℃" in rec.note
     assert rec.skip is False
 
@@ -160,12 +158,12 @@ def test_a_cool_target_above_the_room_is_pulled_to_the_near_side():
     # 室外 27℃ → 表值制冷 24℃；室温 22℃ → 那台空调不会制冷。
     rec = recommend(27, 0, room_c=22)
     assert rec.mode == COOL
-    assert rec.temp == 20            # 室温 - 2
+    assert rec.temp == 20  # 室温 - 2
 
 
 def test_the_room_fix_respects_the_legal_range():
-    assert recommend(16, 0, room_c=30).temp == 30       # 30+2 clamps to the max
-    assert recommend(36, 0, room_c=16).temp == 16       # 16-2 clamps to the min
+    assert recommend(16, 0, room_c=30).temp == 30  # 30+2 clamps to the max
+    assert recommend(36, 0, room_c=16).temp == 16  # 16-2 clamps to the min
 
 
 def test_without_a_room_reading_the_table_is_untouched():
@@ -184,27 +182,35 @@ def test_the_two_hour_trend_starts_at_the_current_hour():
     payload = {
         "current": {"temperature_2m": 30.0, "time": "2026-10-23T15:20"},
         "hourly": {
-            "time": ["2026-10-23T13:00", "2026-10-23T14:00",
-                     "2026-10-23T15:00", "2026-10-23T16:00",
-                     "2026-10-23T17:00"],
+            "time": [
+                "2026-10-23T13:00",
+                "2026-10-23T14:00",
+                "2026-10-23T15:00",
+                "2026-10-23T16:00",
+                "2026-10-23T17:00",
+            ],
             "temperature_2m": [10.0, 11.0, 30.0, 29.0, 28.0],
         },
     }
     now = parse_open_meteo(payload)
-    assert now.next2h_delta_c == -2      # 15:00 → 17:00, not 13:00 → 15:00
+    assert now.next2h_delta_c == -2  # 15:00 → 17:00, not 13:00 → 15:00
 
 
 def test_the_two_hour_trend_ignores_a_stamp_from_another_day():
-    payload = {"current": {"temperature_2m": 20.0, "time": "2026-10-23T15:20"},
-               "hourly": {"time": ["2026-10-22T15:00", "2026-10-22T16:00",
-                                   "2026-10-22T17:00"],
-                          "temperature_2m": [30.0, 31.0, 32.0]}}
+    payload = {
+        "current": {"temperature_2m": 20.0, "time": "2026-10-23T15:20"},
+        "hourly": {
+            "time": ["2026-10-22T15:00", "2026-10-22T16:00", "2026-10-22T17:00"],
+            "temperature_2m": [30.0, 31.0, 32.0],
+        },
+    }
     # 昨天的 15:00 不是「现在」；找不到就当没有未来，别把旧的温差当趋势。
     assert parse_open_meteo(payload).next2h_delta_c == 0
 
 
 def test_the_two_hour_trend_is_dropped_when_the_series_stops_at_now():
-    payload = {"current": {"temperature_2m": 30.0, "time": "2026-10-23T23:00"},
-               "hourly": {"time": ["2026-10-23T23:00"],
-                          "temperature_2m": [30.0]}}
+    payload = {
+        "current": {"temperature_2m": 30.0, "time": "2026-10-23T23:00"},
+        "hourly": {"time": ["2026-10-23T23:00"], "temperature_2m": [30.0]},
+    }
     assert parse_open_meteo(payload).next2h_delta_c == 0

@@ -31,13 +31,20 @@ KEEPALIVE_S = 15
 class MqttBridge:
     """Subscribe to the gateway's state/status, publish commands to it."""
 
-    def __init__(self, *, host: str, port: int, prefix: str,
-                 client_id: str = "ac-bot",
-                 username: str = "", password: str = "",
-                 on_state: Optional[PayloadHandler] = None,
-                 on_status: Optional[PayloadHandler] = None,
-                 on_env: Optional[RetainedHandler] = None,
-                 on_event: Optional[RetainedHandler] = None) -> None:
+    def __init__(
+        self,
+        *,
+        host: str,
+        port: int,
+        prefix: str,
+        client_id: str = "ac-bot",
+        username: str = "",
+        password: str = "",
+        on_state: Optional[PayloadHandler] = None,
+        on_status: Optional[PayloadHandler] = None,
+        on_env: Optional[RetainedHandler] = None,
+        on_event: Optional[RetainedHandler] = None,
+    ) -> None:
         self._host = host
         self._port = port
         self._client_id = client_id
@@ -59,8 +66,7 @@ class MqttBridge:
 
     def _build_client(self):
         """A configured paho client, not yet dialled. Also used by `restart`."""
-        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
-                             client_id=self._client_id)
+        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=self._client_id)
         if self._username:
             client.username_pw_set(self._username, self._password or None)
         client.on_connect = self._on_connect
@@ -73,9 +79,14 @@ class MqttBridge:
     @property
     def topics(self) -> dict:
         """Every topic the bridge uses, derived from one prefix (spec 9.1)."""
-        return {"cmd": self._cmd_topic, "state": self._state_topic,
-                "status": self._status_topic, "env": self._env_topic,
-                "hb": self._hb_topic, "event": self._event_topic}
+        return {
+            "cmd": self._cmd_topic,
+            "state": self._state_topic,
+            "status": self._status_topic,
+            "env": self._env_topic,
+            "hb": self._hb_topic,
+            "event": self._event_topic,
+        }
 
     @property
     def connected(self) -> bool:
@@ -102,8 +113,9 @@ class MqttBridge:
         """
         old = self._client
         log.warning("mqtt: re-dialling with a fresh client")
-        threading.Thread(target=self._reconnect, args=(old,),
-                         name="mqtt-restart", daemon=True).start()
+        threading.Thread(
+            target=self._reconnect, args=(old,), name="mqtt-restart", daemon=True
+        ).start()
 
     def _reconnect(self, old) -> None:
         try:
@@ -148,11 +160,21 @@ class MqttBridge:
             if getattr(reason_code, "is_failure", False) or reason_code != 0:
                 log.warning("mqtt connect failed: %s", reason_code)
                 return
-            log.info("mqtt connected; subscribing to %s, %s, %s and %s",
-                     self._state_topic, self._status_topic, self._env_topic,
-                     self._event_topic)
-            client.subscribe([(self._state_topic, 1), (self._status_topic, 1),
-                              (self._env_topic, 1), (self._event_topic, 1)])
+            log.info(
+                "mqtt connected; subscribing to %s, %s, %s and %s",
+                self._state_topic,
+                self._status_topic,
+                self._env_topic,
+                self._event_topic,
+            )
+            client.subscribe(
+                [
+                    (self._state_topic, 1),
+                    (self._status_topic, 1),
+                    (self._env_topic, 1),
+                    (self._event_topic, 1),
+                ]
+            )
         except Exception:  # noqa: BLE001 - never let a callback kill paho's thread
             log.exception("mqtt: the connect callback failed; the link stays up")
 
@@ -195,5 +217,7 @@ class MqttBridge:
         try:
             handler(*args)
         except Exception:  # noqa: BLE001 - never let a handler kill the socket
-            log.exception("mqtt: the %s handler failed; the link stays up",
-                          getattr(handler, "__name__", "payload"))
+            log.exception(
+                "mqtt: the %s handler failed; the link stays up",
+                getattr(handler, "__name__", "payload"),
+            )

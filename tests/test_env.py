@@ -10,8 +10,7 @@ The firmware publishes ``ac/env``; the service records it and answers "当前 /
 
 import datetime as dt
 
-from app.env import (CHART_POINTS, EnvReading, EnvSample, aggregate,
-                     chart_points, parse_env)
+from app.env import CHART_POINTS, EnvReading, EnvSample, aggregate, chart_points, parse_env
 
 
 def _at(*parts) -> float:
@@ -54,8 +53,9 @@ def test_parse_env_rejects_an_impossible_temperature():
 
 def test_parse_env_still_accepts_a_cold_but_real_room():
     """Guard against over-tightening: a cold room is weather, not a glitch."""
-    assert parse_env({"temp": 3, "humidity": 45, "ok": True}) == \
-        EnvReading(temp=3, humidity=45, ok=True)
+    assert parse_env({"temp": 3, "humidity": 45, "ok": True}) == EnvReading(
+        temp=3, humidity=45, ok=True
+    )
 
 
 def test_parse_env_survives_junk():
@@ -63,10 +63,7 @@ def test_parse_env_survives_junk():
 
 
 def _samples(*rows) -> list[EnvSample]:
-    return [
-        EnvSample(at=at, temp=temp, humidity=hum, ok=ok)
-        for (at, temp, hum, ok) in rows
-    ]
+    return [EnvSample(at=at, temp=temp, humidity=hum, ok=ok) for (at, temp, hum, ok) in rows]
 
 
 def test_current_window_returns_the_latest_reading():
@@ -84,7 +81,7 @@ def test_statistics_ignore_failed_reads():
     now = dt.datetime(2026, 10, 15, 23, 0)
     rows = _samples(
         (_at(2026, 10, 15, 22, 0), 25, 50, True),
-        (_at(2026, 10, 15, 22, 5), 99, 99, False),   # a failed read: not data
+        (_at(2026, 10, 15, 22, 5), 99, 99, False),  # a failed read: not data
         (_at(2026, 10, 15, 22, 10), 27, 52, True),
     )
     summary = aggregate(rows, now=now, window="all")
@@ -95,8 +92,8 @@ def test_statistics_ignore_failed_reads():
 def test_day_window_starts_at_local_midnight():
     now = dt.datetime(2026, 10, 15, 23, 0)
     rows = _samples(
-        (_at(2026, 10, 14, 23, 59), 11, 11, True),   # yesterday
-        (_at(2026, 10, 15, 0, 1), 22, 40, True),     # today
+        (_at(2026, 10, 14, 23, 59), 11, 11, True),  # yesterday
+        (_at(2026, 10, 15, 0, 1), 22, 40, True),  # today
     )
     summary = aggregate(rows, now=now, window="day")
     assert summary.count == 1
@@ -106,8 +103,8 @@ def test_day_window_starts_at_local_midnight():
 def test_week_window_is_the_last_seven_days():
     now = dt.datetime(2026, 10, 15, 12, 0)
     rows = _samples(
-        (_at(2026, 10, 7, 12, 0), 11, 11, True),     # 8 days ago: outside
-        (_at(2026, 10, 9, 12, 0), 22, 40, True),     # 6 days ago: inside
+        (_at(2026, 10, 7, 12, 0), 11, 11, True),  # 8 days ago: outside
+        (_at(2026, 10, 9, 12, 0), 22, 40, True),  # 6 days ago: inside
     )
     summary = aggregate(rows, now=now, window="week")
     assert summary.count == 1
@@ -115,27 +112,25 @@ def test_week_window_is_the_last_seven_days():
 
 
 def test_tonight_window_covers_a_cross_midnight_night():
-    now = dt.datetime(2026, 10, 15, 2, 0)            # 02:00, inside 23:00-07:00
+    now = dt.datetime(2026, 10, 15, 2, 0)  # 02:00, inside 23:00-07:00
     rows = _samples(
-        (_at(2026, 10, 14, 22, 0), 11, 11, True),    # before the window
-        (_at(2026, 10, 14, 23, 30), 24, 44, True),   # inside
-        (_at(2026, 10, 15, 1, 30), 25, 45, True),    # inside
+        (_at(2026, 10, 14, 22, 0), 11, 11, True),  # before the window
+        (_at(2026, 10, 14, 23, 30), 24, 44, True),  # inside
+        (_at(2026, 10, 15, 1, 30), 25, 45, True),  # inside
     )
-    summary = aggregate(rows, now=now, window="tonight",
-                        night_start="23:00", night_end="07:00")
+    summary = aggregate(rows, now=now, window="tonight", night_start="23:00", night_end="07:00")
     assert summary.count == 2
     assert summary.temp_min == 24
 
 
 def test_tonight_window_falls_back_to_last_night_outside_it():
-    now = dt.datetime(2026, 10, 15, 12, 0)           # midday: no active night
+    now = dt.datetime(2026, 10, 15, 12, 0)  # midday: no active night
     rows = _samples(
-        (_at(2026, 10, 14, 23, 30), 24, 44, True),   # last night
-        (_at(2026, 10, 15, 1, 30), 25, 45, True),    # last night
-        (_at(2026, 10, 15, 11, 0), 30, 60, True),    # this morning: outside
+        (_at(2026, 10, 14, 23, 30), 24, 44, True),  # last night
+        (_at(2026, 10, 15, 1, 30), 25, 45, True),  # last night
+        (_at(2026, 10, 15, 11, 0), 30, 60, True),  # this morning: outside
     )
-    summary = aggregate(rows, now=now, window="tonight",
-                        night_start="23:00", night_end="07:00")
+    summary = aggregate(rows, now=now, window="tonight", night_start="23:00", night_end="07:00")
     assert summary.count == 2
 
 
@@ -155,8 +150,7 @@ def test_an_empty_window_reports_itself_as_empty():
 
 def test_chart_points_are_capped_however_long_the_window_is():
     now = dt.datetime(2026, 10, 15, 23, 59)
-    rows = _samples(*[(_at(2026, 10, 15, 0, 0) + 300 * i, 25, 50, True)
-                      for i in range(288)])
+    rows = _samples(*[(_at(2026, 10, 15, 0, 0) + 300 * i, 25, 50, True) for i in range(288)])
     points = chart_points(rows, now=now, window="day")
     assert 2 <= len(points) <= CHART_POINTS
     assert [p.at for p in points] == sorted(p.at for p in points)
@@ -165,8 +159,9 @@ def test_chart_points_are_capped_however_long_the_window_is():
 def test_chart_points_average_each_bucket():
     now = dt.datetime(2026, 10, 15, 23, 59)
     # Two hours of 5-minute rows alternating 24/26 -> every bucket averages 25.
-    rows = _samples(*[(_at(2026, 10, 15, 0, 0) + 300 * i, 24 + 2 * (i % 2), 50, True)
-                      for i in range(24)])
+    rows = _samples(
+        *[(_at(2026, 10, 15, 0, 0) + 300 * i, 24 + 2 * (i % 2), 50, True) for i in range(24)]
+    )
     points = chart_points(rows, now=now, window="day", max_points=4)
     assert [p.temp for p in points] == [25, 25, 25, 25]
     assert [p.humidity for p in points] == [50, 50, 50, 50]
@@ -180,22 +175,24 @@ def test_chart_points_leave_out_buckets_with_no_readings():
         *[(_at(2026, 10, 15, 12, 0) + 300 * i, 27, 50, True) for i in range(12)],
     )
     points = chart_points(rows, now=now, window="day", max_points=12)
-    assert len(points) == 2                       # one hour here, one hour there
+    assert len(points) == 2  # one hour here, one hour there
     assert [p.temp for p in points] == [25, 27]
 
 
 def test_chart_points_ignore_failed_reads():
     now = dt.datetime(2026, 10, 15, 12, 0)
-    rows = _samples((_at(2026, 10, 15, 9, 0), 25, 50, True),
-                    (_at(2026, 10, 15, 9, 5), 99, 99, False))
+    rows = _samples(
+        (_at(2026, 10, 15, 9, 0), 25, 50, True), (_at(2026, 10, 15, 9, 5), 99, 99, False)
+    )
     points = chart_points(rows, now=now, window="day", max_points=1)
     assert [(p.temp, p.humidity) for p in points] == [(25, 50)]
 
 
 def test_chart_points_for_the_current_window_are_the_latest_reading():
     now = dt.datetime(2026, 10, 15, 12, 0)
-    rows = _samples((_at(2026, 10, 15, 11, 0), 25, 50, True),
-                    (_at(2026, 10, 15, 11, 55), 27, 52, True))
+    rows = _samples(
+        (_at(2026, 10, 15, 11, 0), 25, 50, True), (_at(2026, 10, 15, 11, 55), 27, 52, True)
+    )
     points = chart_points(rows, now=now, window="current")
     assert [p.temp for p in points] == [27]
 
@@ -203,8 +200,10 @@ def test_chart_points_for_the_current_window_are_the_latest_reading():
 def test_chart_points_share_the_summary_window():
     """The picture and the line of text must describe the same readings."""
     now = dt.datetime(2026, 10, 15, 12, 0)
-    rows = _samples((_at(2026, 10, 14, 20, 0), 30, 50, True),    # yesterday
-                    (_at(2026, 10, 15, 9, 0), 25, 50, True))     # today
+    rows = _samples(
+        (_at(2026, 10, 14, 20, 0), 30, 50, True),  # yesterday
+        (_at(2026, 10, 15, 9, 0), 25, 50, True),
+    )  # today
     summary = aggregate(rows, now=now, window="day")
     points = chart_points(rows, now=now, window="day")
     assert summary.count == len(points) == 1

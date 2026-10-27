@@ -37,8 +37,12 @@ class FakeFeishu:
 
 
 def build_service(tmp_path, **overrides):
-    values = {"feishu_app_id": "cli_test", "feishu_app_secret": "secret",
-              "owner_open_id": "ou_test", "db_path": str(tmp_path / "t.sqlite3")}
+    values = {
+        "feishu_app_id": "cli_test",
+        "feishu_app_secret": "secret",
+        "owner_open_id": "ou_test",
+        "db_path": str(tmp_path / "t.sqlite3"),
+    }
     values.update(overrides)
     service = Service(Settings(_env_file=None, **values))
     service.feishu = FakeFeishu()
@@ -82,7 +86,8 @@ def test_suggest_never_touches_the_aircon(tmp_path):
     assert service.view.power == 0
     assert service.pending is False
     assert service.feishu.replies == [
-        ("om_1", "看着有点热？说「制冷 22 度」，或点卡片上的「制冷」。")]
+        ("om_1", "看着有点热？说「制冷 22 度」，或点卡片上的「制冷」。")
+    ]
 
 
 def test_a_redelivered_message_is_ignored(tmp_path):
@@ -113,8 +118,8 @@ def test_non_owner_is_ignored_completely(tmp_path):
 
 def test_the_card_is_posted_once_and_patched_afterwards(tmp_path):
     service = build_service(tmp_path)
-    service._on_text_message("ou_test", "oc_1", "om_1", "开机")   # 没卡片 -> 补一张
-    service._on_text_message("ou_test", "oc_1", "om_2", "关机")   # 有卡片 -> 只 patch
+    service._on_text_message("ou_test", "oc_1", "om_1", "开机")  # 没卡片 -> 补一张
+    service._on_text_message("ou_test", "oc_1", "om_2", "关机")  # 有卡片 -> 只 patch
     assert service.feishu.sent == ["oc_1"]
     assert service.feishu.patched == ["om_card"]
     assert len(service.feishu.replies) == 2
@@ -125,7 +130,8 @@ def test_a_query_gets_a_receipt_without_moving_anything(tmp_path):
     service._on_text_message("ou_test", "oc_1", "om_1", "状态")
     assert service._actions.empty()
     assert service.feishu.replies == [
-        ("om_1", "现在 关机 · 制冷 · 24℃ · 自动风 · 🟢 在线（更新于 --:--:--）")]
+        ("om_1", "现在 关机 · 制冷 · 24℃ · 自动风 · 🟢 在线（更新于 --:--:--）")
+    ]
 
 
 def test_card_commands_still_post_the_card_without_a_receipt(tmp_path):
@@ -162,9 +168,9 @@ def test_summon_replaces_the_old_card_with_a_new_one_and_stays_silent(tmp_path):
     service = build_service(tmp_path)
     service.store.set_message_id("ou_test", "om_old")
     service._on_text_message("ou_test", "oc_1", "om_1", "设置卡片")
-    assert service.feishu.sent == ["oc_1"]              # 新卡发出去了
-    assert service.store.get_message_id("ou_test") == "om_card"   # 指针切到新卡
-    assert service.feishu.recalled == ["om_old"]        # 旧卡被撤回
+    assert service.feishu.sent == ["oc_1"]  # 新卡发出去了
+    assert service.store.get_message_id("ou_test") == "om_card"  # 指针切到新卡
+    assert service.feishu.recalled == ["om_old"]  # 旧卡被撤回
     assert service.feishu.replies == []
     assert service._actions.empty()
 
@@ -195,7 +201,7 @@ def test_summon_without_an_old_card_posts_exactly_one_card(tmp_path):
     service._on_text_message("ou_test", "oc_1", "om_1", "设置卡片")
     assert service.feishu.sent == ["oc_1"]
     assert service.store.get_message_id("ou_test") == "om_card"
-    assert getattr(service.feishu, "recalled", []) == []   # 没有撤回调用
+    assert getattr(service.feishu, "recalled", []) == []  # 没有撤回调用
     assert service.feishu.replies == []
 
 
@@ -206,7 +212,7 @@ def test_the_retired_card_words_now_fall_back_to_unclear(tmp_path):
     service._on_text_message("ou_test", "oc_1", "om_2", "空调")
     assert len(service.feishu.replies) == 2
     assert all("没听懂这句。试试：" in text for _, text in service.feishu.replies)
-    assert service.feishu.sent == ["oc_1"]   # 只在无卡时补；之后不新发
+    assert service.feishu.sent == ["oc_1"]  # 只在无卡时补；之后不新发
     assert service._actions.empty()
 
 

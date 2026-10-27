@@ -1,18 +1,24 @@
 # Secrets and local state must never be committed.
 .env
+.env.*
+!.env.example
 *.sqlite3
 *.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
 
 # Python
 __pycache__/
 *.py[cod]
 .venv/
+.package-check/
 venv/
 *.egg-info/
 .eggs/
 dist/
 build/
 .pytest_cache/
+.ruff_cache/
 .coverage
 htmlcov/
 

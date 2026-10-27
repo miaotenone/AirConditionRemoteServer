@@ -1,0 +1,6 @@
+include uv.lock .env.example .editorconfig .gitattributes
+include CHANGELOG.md CONTRIBUTING.md SECURITY.md
+recursive-include docs *.md *.original.txt
+recursive-include deploy *.service *.conf *.example
+recursive-include scripts *.py
+recursive-include .github *.yml *.md

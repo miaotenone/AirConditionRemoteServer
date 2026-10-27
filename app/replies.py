@@ -99,8 +99,7 @@ def _temperature_clamped(intent: Intent, before: AcState) -> bool:
     return changed and clamp_temp(target) != target
 
 
-def _modifiers(intent: Intent, before: AcState, after: AcState,
-               presence: Presence) -> list[str]:
+def _modifiers(intent: Intent, before: AcState, after: AcState, presence: Presence) -> list[str]:
     """Reasons the receipt must not be read as a plain "done".
 
     Order is fixed (design 5.4): clamp, refusal, power, link.
@@ -126,8 +125,7 @@ def _modifiers(intent: Intent, before: AcState, after: AcState,
     return notes
 
 
-def _status_text(state: AcState, presence: Presence, *, stale: bool,
-                 updated_at: str) -> str:
+def _status_text(state: AcState, presence: Presence, *, stale: bool, updated_at: str) -> str:
     dot = "🟢 在线" if presence.online else "🔴 离线"
     text = f"现在 {state_line(state)} · {dot}（更新于 {updated_at}）"
     if stale:
@@ -148,8 +146,13 @@ def _suggest_text(hint: str) -> str:
 # 服务拿到数据后直接调它们，`render` 只负责不需要数据的夜间与预设入口。
 
 #: Human names for the history windows.
-_WINDOW_LABELS = {"current": "当前", "tonight": "今夜", "day": "一天",
-                  "week": "一周", "all": "全部"}
+_WINDOW_LABELS = {
+    "current": "当前",
+    "tonight": "今夜",
+    "day": "一天",
+    "week": "一周",
+    "all": "全部",
+}
 
 #: What the preset entry word answers with: the real controls live on the card.
 _PRESET_OPEN_TEXT = "预设卡片 👇（点名字套用，点「＋新建」新建，点「改」编辑）"
@@ -169,24 +172,24 @@ def render_history(summary: Summary, *, target: Optional[int] = None) -> str:
     if latest.humidity:
         text += f" · 湿度 {latest.humidity}%"
     if summary.count > 1:
-        text += (f"（{summary.count} 条，{summary.temp_min}~{summary.temp_max}℃，"
-                 f"均 {summary.temp_avg:.1f}℃）")
+        text += (
+            f"（{summary.count} 条，{summary.temp_min}~{summary.temp_max}℃，"
+            f"均 {summary.temp_avg:.1f}℃）"
+        )
     if target is not None:
         delta = latest.temp - target
         text += f" · 目标 {target}℃（差 {'+' if delta >= 0 else ''}{delta}℃）"
     return text
 
 
-def render_weather(now: Optional[WeatherNow],
-                   recommendation: Optional[Recommendation]) -> str:
+def render_weather(now: Optional[WeatherNow], recommendation: Optional[Recommendation]) -> str:
     """The text half of the daily suggestion; the card carries the buttons."""
     if now is None or recommendation is None:
         return "🌤 天气没拿到，稍后再试。"
     return f"🌤 {recommendation.note}\n点「立即执行」我就照做，或点「忽略」。"
 
 
-def render_night(mode: str, *, enabled: bool, target: int,
-                 start: str, end: str) -> str:
+def render_night(mode: str, *, enabled: bool, target: int, start: str, end: str) -> str:
     """The night switch / status receipt."""
     window = f"{start}~{end}" if start and end else ""
     if mode == "on":
@@ -198,8 +201,7 @@ def render_night(mode: str, *, enabled: bool, target: int,
     return "🌙 夜间：未开"
 
 
-def render_preset_applied(preset: Preset, when: str,
-                          at: Optional[float] = None) -> str:
+def render_preset_applied(preset: Preset, when: str, at: Optional[float] = None) -> str:
     """What happened after a preset was clicked: run now, or booked for later."""
     if when == "at" and at is not None:
         return f"✅ 已预约「{preset.name}」 {datetime.fromtimestamp(at).strftime('%H:%M')} 执行"
@@ -210,8 +212,14 @@ def render_preset_missing(name: str) -> str:
     return f"没有叫「{name}」的预设。"
 
 
-def render(intent: Intent, state: AcState, presence: Presence, *,
-           stale: bool = False, updated_at: str = "--:--:--") -> str:
+def render(
+    intent: Intent,
+    state: AcState,
+    presence: Presence,
+    *,
+    stale: bool = False,
+    updated_at: str = "--:--:--",
+) -> str:
     """The reply for one message. Never empty, never says more than it knows."""
     if intent.kind == "query":
         return _status_text(state, presence, stale=stale, updated_at=updated_at)

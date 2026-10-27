@@ -1,5 +1,9 @@
 # 飞书自建应用 —— 建应用清单
 
+本页说明应用设置；安装与运行见 [README](../README.md)，Linux 服务部署见
+[部署指南](deployment.md)。历史实测记录保留在 [归档索引](history/README.md)，
+不代表当前生产状态；飞书控制台界面、scope 名称和发布规则以实际应用为准。
+
 目标：拿到三样东西，并让**长连接**（不需要公网、不需要内网穿透）能收到消息和卡片点击。
 
 | 要拿到的东西 | 填到哪 |
@@ -103,16 +107,16 @@
 ```bash
 cp .env.example .env
 $EDITOR .env          # 填 FEISHU_APP_ID / FEISHU_APP_SECRET / OWNER_OPEN_ID
+uv sync --frozen
 
 # 本地先干跑一次，只验证卡片 JSON 能生成（不需要任何凭据）
-python -m app.main --print-card
+uv run --frozen python -m app.main --print-card
 
 # 正式启动
-python -m app.main
+uv run --frozen python -m app.main
 ```
 
-部署成服务见 [`deploy/ac-bot.service`](../deploy/ac-bot.service) 顶部注释，
-以及 [`interface-spec.md`](interface-spec.md) §8。
+部署成服务见 [部署指南](deployment.md)，使用独立生产配置而不是直接复制本地 `.env`。
 
 ## 10. 验收清单（端到端）
 
@@ -122,12 +126,12 @@ python -m app.main
 | 2 | 给机器人发 `设置卡片` | 收到**遥控器卡片**，顶部显示当前状态 |
 | 3 | 卡片上点「开机」 | 卡片立刻出现 ⏳ → 约 1 秒内变实状态、空调开机 |
 | 4 | 连点 3 次「＋」 | 只发**一条** `ac/cmd`（日志里只有一行），温度 +3 |
-| 5 | 长按遥控器实体键把空调关掉（或用遥控器改温度）| 静置 ≤30 秒（心跳）后卡片与实际**对齐** |
+| 5 | 用实体遥控器改变空调 | 网关不知道实体遥控器动作，卡片可能与实机不一致；不得把周期 state 上报当物理检测 |
 | 6 | 把 ESP32 断电 | 约 25 秒后卡片变「🔴 离线」 |
 | 7 | ESP32 上电 | 卡片自动回到「🟢 在线」 |
 
-> 第 5 条就是 [`mqtt-bringup.md`](mqtt-bringup.md) §5 说的**影子状态陷阱**：固件不知道你用
-> 实体遥控器做了什么，只能靠它下一次上报来对齐。
+> 第 5 条是**影子状态陷阱**：固件不知道你用实体遥控器做了什么，下一次上报
+> 仍是网关缓存，不会自动探测或对齐实机。见 [接口规格 §4.4](interface-spec.md#44-时间与恢复边界)。
 
 文本控制的验收（完整 13 条见设计文档 §8，这里是最关键的几条）：
 
@@ -148,8 +152,8 @@ python -m app.main
    - 长连接里**一个回调包都收不到** → 第 6 步的回调没订阅，或订阅成了 `v1` 版本；
    - 收到了但字段读不出来，日志是 `card action from : value=None option=None`，且后面跟着
      `WARNING card action payload matched no known shape: {…}` → **那行 `{…}` 就是原始报文**，
-     发我即可定位（旧版只认 `data.event` 下的嵌套形状，2026-10-14 就是这样丢了 4 次点击，
-     见 §12 与 [`feishu-bringup.md`](feishu-bringup.md) §4）；
+     请先去除 token、个人标识再报告（旧版回调形状问题的历史证据，
+     见 §12 与 [飞书联调原文](history/feishu-bringup-2026-10-27.original.txt)）；
    - 收到了、字段也对，但被丢弃，日志是 `ignoring event from non-owner 'ou_…'`
      → `OWNER_OPEN_ID` 没填对。
 2. **完全收不到消息** → 第 4 步没切成「长连接」，或机器人能力没开，或应用没发布/不在可用范围。
@@ -182,7 +186,7 @@ python -m app.main
   `data.event.action.value`、`data.event.action.option`、
   `data.event.context.open_chat_id`、`data.event.context.open_message_id`。
   **读顶层不报错，只会静默得到全 `None`** —— 2026-10-14 就是这样丢了 4 次真实点击，
-  详见 [`feishu-bringup.md`](feishu-bringup.md) §4。
+  详见 [飞书联调原文](history/feishu-bringup-2026-10-27.original.txt)。
 - 发卡片：`POST /im/v1/messages`（`msg_type=interactive`）；
   更新卡片：`PATCH /im/v1/messages/:message_id`
 - 回文本：`POST /im/v1/messages/:message_id/reply`（`ReplyMessageRequest`，`msg_type=text`，
@@ -198,7 +202,7 @@ python -m app.main
 **「发送文字消息」**，点菜单＝发一条文本，走的正是 §10 验收过的文本路径 ——
 同样的解析、同样的去抖、同样的回执、同样的补卡。
 
-**当前线上配置（版本 1.0.4，2026-10-15 已发布）**：展示形式 = **悬浮菜单**，
+**历史菜单配置示例（应用版本 1.0.4，2026-10-15 记录，并非本服务版本）**：展示形式 = **悬浮菜单**，
 5 个分组容器、共 **18** 个子项 —— `卡片 2 / 模式 5 / 风速 4 / 开关 2 / 其他 5`。
 
 「其他」组下的 `预设` / `夜间` / `天气` / `历史` 都是**固定入口**（进去之后能配的东西

@@ -60,8 +60,15 @@ _STALE = "状态可能过期：设备在线，但已超过 90 秒没有上报状
 # ------------------------------------------------------------------ building
 
 
-def _button(label: str, action: str, value: int | str, *,
-            active: bool = False, disabled: bool = False, size: str = "medium") -> dict:
+def _button(
+    label: str,
+    action: str,
+    value: int | str,
+    *,
+    active: bool = False,
+    disabled: bool = False,
+    size: str = "medium",
+) -> dict:
     """One callback button. `active` is rendered as the highlighted choice."""
     button = {
         "tag": "button",
@@ -84,8 +91,13 @@ def _auto_column(child: dict) -> dict:
 
 
 def _weighted_column(child: dict) -> dict:
-    return {"tag": "column", "width": "weighted", "weight": 1, "vertical_align": "center",
-            "elements": [child]}
+    return {
+        "tag": "column",
+        "width": "weighted",
+        "weight": 1,
+        "vertical_align": "center",
+        "elements": [child],
+    }
 
 
 def _row(children: list, *, weighted_at: int | None = None) -> dict:
@@ -94,12 +106,23 @@ def _row(children: list, *, weighted_at: int | None = None) -> dict:
         _weighted_column(child) if weighted_at == index else _auto_column(child)
         for index, child in enumerate(children)
     ]
-    return {"tag": "column_set", "flex_mode": "flow", "horizontal_spacing": "small",
-            "columns": columns}
+    return {
+        "tag": "column_set",
+        "flex_mode": "flow",
+        "horizontal_spacing": "small",
+        "columns": columns,
+    }
 
 
-def _status_markdown(state: AcState, presence: Presence, updated_at: str, *,
-                     pending: bool, unconfirmed: bool, stale: bool) -> str:
+def _status_markdown(
+    state: AcState,
+    presence: Presence,
+    updated_at: str,
+    *,
+    pending: bool,
+    unconfirmed: bool,
+    stale: bool,
+) -> str:
     power = "开机" if state.power else "关机"
     mode = MODE_LABELS.get(state.mode, str(state.mode))
     fan = FAN_LABELS.get(state.fan, str(state.fan))
@@ -112,8 +135,10 @@ def _status_markdown(state: AcState, presence: Presence, updated_at: str, *,
     else:
         marker = ""
 
-    lines = [f"**状态**：{power} · {mode} · {state.temp}℃ · {fan}风",
-             f"**连接**：{dot} · 更新于 {updated_at}{marker}"]
+    lines = [
+        f"**状态**：{power} · {mode} · {state.temp}℃ · {fan}风",
+        f"**连接**：{dot} · 更新于 {updated_at}{marker}",
+    ]
     if stale:
         lines.append(_STALE)
     return "\n".join(lines)
@@ -140,8 +165,7 @@ MOVED_NOTICE_TEXT = "遥控器已更新，最新一张在下面 👇"
 MENU_MOVED_NOTICE_TEXT = "这张卡已更新到最新位置，请看下面 👇"
 
 
-def build_moved_notice_card(title: str = HEADER_TITLE,
-                           *, text: str = MOVED_NOTICE_TEXT) -> dict:
+def build_moved_notice_card(title: str = HEADER_TITLE, *, text: str = MOVED_NOTICE_TEXT) -> dict:
     """A one-line placeholder for an old card that could not be recalled.
 
     Summoning a fresh card (design D22, and every v1.2 menu tap) tries to recall
@@ -164,9 +188,15 @@ def build_moved_notice_card(title: str = HEADER_TITLE,
     }
 
 
-def build_card(state: AcState, presence: Presence, *,
-               pending: bool = False, unconfirmed: bool = False, stale: bool = False,
-               updated_at: str = "--:--:--") -> dict:
+def build_card(
+    state: AcState,
+    presence: Presence,
+    *,
+    pending: bool = False,
+    unconfirmed: bool = False,
+    stale: bool = False,
+    updated_at: str = "--:--:--",
+) -> dict:
     """Render the remote-control card for `state` / `presence`.
 
     Args:
@@ -179,26 +209,35 @@ def build_card(state: AcState, presence: Presence, *,
     # Everything except power is meaningless while the unit is off (spec 5.3).
     greyed = is_off
 
-    power_row = _row([
-        _button("开机", "power", 1, active=state.power == 1),
-        _button("关机", "power", 0, active=state.power == 0),
-    ])
+    power_row = _row(
+        [
+            _button("开机", "power", 1, active=state.power == 1),
+            _button("关机", "power", 0, active=state.power == 0),
+        ]
+    )
 
-    mode_row = _row([
-        _button(MODE_LABELS[value], "mode", value, active=state.mode == value, disabled=greyed)
-        for value in sorted(MODE_LABELS)
-    ])
+    mode_row = _row(
+        [
+            _button(MODE_LABELS[value], "mode", value, active=state.mode == value, disabled=greyed)
+            for value in sorted(MODE_LABELS)
+        ]
+    )
 
-    temperature_row = _row([
-        _button("－", "temp_step", -1, disabled=greyed),
-        _temperature_select(state, disabled=greyed),
-        _button("＋", "temp_step", 1, disabled=greyed),
-    ], weighted_at=1)
+    temperature_row = _row(
+        [
+            _button("－", "temp_step", -1, disabled=greyed),
+            _temperature_select(state, disabled=greyed),
+            _button("＋", "temp_step", 1, disabled=greyed),
+        ],
+        weighted_at=1,
+    )
 
-    fan_row = _row([
-        _button(FAN_LABELS[value], "fan", value, active=state.fan == value, disabled=greyed)
-        for value in sorted(FAN_LABELS)
-    ])
+    fan_row = _row(
+        [
+            _button(FAN_LABELS[value], "fan", value, active=state.fan == value, disabled=greyed)
+            for value in sorted(FAN_LABELS)
+        ]
+    )
 
     refresh_row = _row([_button("刷新", "refresh", 0, size="small")])
 
@@ -211,13 +250,25 @@ def build_card(state: AcState, presence: Presence, *,
         },
         "body": {
             "elements": [
-                {"tag": "markdown", "content": _status_markdown(
-                    state, presence, updated_at,
-                    pending=pending, unconfirmed=unconfirmed, stale=stale)},
-                _label("电源"), power_row,
-                _label("模式"), mode_row,
-                _label("温度"), temperature_row,
-                _label("风速"), fan_row,
+                {
+                    "tag": "markdown",
+                    "content": _status_markdown(
+                        state,
+                        presence,
+                        updated_at,
+                        pending=pending,
+                        unconfirmed=unconfirmed,
+                        stale=stale,
+                    ),
+                },
+                _label("电源"),
+                power_row,
+                _label("模式"),
+                mode_row,
+                _label("温度"),
+                temperature_row,
+                _label("风速"),
+                fan_row,
                 refresh_row,
             ]
         },
@@ -257,8 +308,10 @@ def _submit_button(label: str, action: str) -> dict:
 
 
 def _options(pairs) -> list:
-    return [{"text": {"tag": "plain_text", "content": label}, "value": str(value)}
-            for label, value in pairs]
+    return [
+        {"text": {"tag": "plain_text", "content": label}, "value": str(value)}
+        for label, value in pairs
+    ]
 
 
 def _select(name: str, placeholder: str, pairs, *, tag: str = "select_static") -> dict:
@@ -303,8 +356,7 @@ def _card_shell(title: str, template: str, elements: list) -> dict:
     return {
         "schema": "2.0",
         "config": {"update_multi": True},
-        "header": {"title": {"tag": "plain_text", "content": title},
-                   "template": template},
+        "header": {"title": {"tag": "plain_text", "content": title}, "template": template},
         "body": {"elements": elements},
     }
 
@@ -323,11 +375,15 @@ def build_preset_card(presets: Sequence[Preset], *, status: str = "") -> dict:
             label = f"{preset.name}（{'开' if preset.power else '关'} · "
             label += f"{MODE_LABELS.get(preset.mode, preset.mode)} · {preset.temp}℃"
             label += f" · {FAN_LABELS.get(preset.fan, preset.fan)}风）"
-            elements.append(_row([
-                _button(label, "preset_apply", preset.id),
-                _button("改", "preset_edit", preset.id, size="small"),
-                _delete_button(preset),
-            ]))
+            elements.append(
+                _row(
+                    [
+                        _button(label, "preset_apply", preset.id),
+                        _button("改", "preset_edit", preset.id, size="small"),
+                        _delete_button(preset),
+                    ]
+                )
+            )
 
     elements.append(_row([_button("＋ 新建", "preset_new", 0, size="small")]))
     return _card_shell(PRESET_TITLE, "blue", elements)
@@ -342,8 +398,7 @@ def _delete_button(preset: Preset) -> dict:
 def build_preset_form(preset: Optional[Preset] = None, *, status: str = "") -> dict:
     """The create/edit form. All four fields are present (design 5.1)."""
     editing = preset is not None
-    current = preset or Preset(name="", power=1, mode=AC_MODE["cool"],
-                               temp=24, fan=AC_FAN["auto"])
+    current = preset or Preset(name="", power=1, mode=AC_MODE["cool"], temp=24, fan=AC_FAN["auto"])
 
     children = [
         _plain_input("name", "预设名字（如 夏天、睡觉）", value=current.name if editing else ""),
@@ -361,38 +416,50 @@ def build_preset_form(preset: Optional[Preset] = None, *, status: str = "") -> d
     return _card_shell(PRESET_TITLE, "blue", elements)
 
 
-def build_settings_card(settings: Mapping[str, str], *, night_enabled: bool,
-                        status: str = "") -> dict:
+def build_settings_card(
+    settings: Mapping[str, str], *, night_enabled: bool, status: str = ""
+) -> dict:
     """Push time and the night window/target -- all editable here (design §7)."""
     children = [
         _time_picker("push_time", f"天气推送时间（当前 {settings.get('push_time', '17:00')}）"),
         _time_picker("night_start", f"夜间开始（当前 {settings.get('night_start', '23:00')}）"),
         _time_picker("night_end", f"夜间结束（当前 {settings.get('night_end', '07:00')}）"),
-        _select("night_target",
-                f"夜间目标温度（当前 {settings.get('night_target', '26')}℃）",
-                _TEMP_CHOICES),
+        _select(
+            "night_target",
+            f"夜间目标温度（当前 {settings.get('night_target', '26')}℃）",
+            _TEMP_CHOICES,
+        ),
         _submit_button("保存设置", "settings_save"),
     ]
 
     elements = []
     if status:
         elements.append({"tag": "markdown", "content": status})
-    elements.append({
-        "tag": "markdown",
-        "content": f"**夜间模式**：{'已开' if night_enabled else '未开'}"
-                   "（开着的夜间才按上面的目标自动调节，风速只到低）",
-    })
-    elements.append(_row([
-        _button("关 夜间" if night_enabled else "开 夜间", "night_toggle",
-                0 if night_enabled else 1),
-    ]))
+    elements.append(
+        {
+            "tag": "markdown",
+            "content": f"**夜间模式**：{'已开' if night_enabled else '未开'}"
+            "（开着的夜间才按上面的目标自动调节，风速只到低）",
+        }
+    )
+    elements.append(
+        _row(
+            [
+                _button(
+                    "关 夜间" if night_enabled else "开 夜间",
+                    "night_toggle",
+                    0 if night_enabled else 1,
+                ),
+            ]
+        )
+    )
     elements.append(_form("settings_form", children))
     return _card_shell(SETTINGS_TITLE, "turquoise", elements)
 
 
-def build_weather_card(now: Optional[WeatherNow],
-                       recommendation: Optional[Recommendation],
-                       *, status: str = "") -> dict:
+def build_weather_card(
+    now: Optional[WeatherNow], recommendation: Optional[Recommendation], *, status: str = ""
+) -> dict:
     """The daily suggestion: outdoor reading + one-tap apply / ignore."""
     elements = []
     if status:
@@ -406,19 +473,23 @@ def build_weather_card(now: Optional[WeatherNow],
     if now.humidity is not None:
         lines.append(f"湿度 {now.humidity}%")
     if now.next2h_delta_c:
-        lines.append(f"两小时内 {'↓' if now.next2h_delta_c < 0 else '↑'}"
-                     f"{abs(now.next2h_delta_c)}℃")
+        lines.append(f"两小时内 {'↓' if now.next2h_delta_c < 0 else '↑'}{abs(now.next2h_delta_c)}℃")
     elements.append({"tag": "markdown", "content": " · ".join(lines)})
     elements.append({"tag": "markdown", "content": f"**建议**：{recommendation.note}"})
-    elements.append(_row([
-        _button("立即执行", "weather_exec", 0),
-        _button("忽略", "weather_ignore", 0),
-    ]))
+    elements.append(
+        _row(
+            [
+                _button("立即执行", "weather_exec", 0),
+                _button("忽略", "weather_ignore", 0),
+            ]
+        )
+    )
     return _card_shell(WEATHER_TITLE, "orange", elements)
 
 
-def build_history_card(summary: Summary, *, target: Optional[int] = None,
-                       text: str = "", points: Sequence = ()) -> dict:
+def build_history_card(
+    summary: Summary, *, target: Optional[int] = None, text: str = "", points: Sequence = ()
+) -> dict:
     """One history window: the summary line, its chart, and the window switcher.
 
     ``points`` are already-downsampled `env.ChartPoint`s. Fewer than two of them
@@ -430,10 +501,14 @@ def build_history_card(summary: Summary, *, target: Optional[int] = None,
     elements: list = [{"tag": "markdown", "content": content}]
     if len(points) >= 2:
         elements.extend(_history_charts(list(points), target))
-    elements.append(_row([
-        _button(label, "history_switch", window, active=(window == summary.window))
-        for window, label in HISTORY_WINDOWS
-    ]))
+    elements.append(
+        _row(
+            [
+                _button(label, "history_switch", window, active=(window == summary.window))
+                for window, label in HISTORY_WINDOWS
+            ]
+        )
+    )
     return _card_shell(HISTORY_TITLE, "indigo", elements)
 
 
@@ -445,8 +520,13 @@ HUMID_LINE = "#3E8FD8"
 TARGET_LINE = "#9AA4B2"
 
 #: The five views, in the order they sit under the chart (design 7.2).
-HISTORY_WINDOWS = (("current", "当前"), ("tonight", "今夜"), ("day", "一天"),
-                   ("week", "一周"), ("all", "全部"))
+HISTORY_WINDOWS = (
+    ("current", "当前"),
+    ("tonight", "今夜"),
+    ("day", "一天"),
+    ("week", "一周"),
+    ("all", "全部"),
+)
 
 
 def _axis_clock(at: float, span: float) -> str:
@@ -485,19 +565,21 @@ def _history_charts(points: list, target: Optional[int]) -> list:
     labels = [_axis_clock(point.at, span) for point in points]
 
     charts = []
-    temperatures = [{"time": label, "value": point.temp, "metric": "室温"}
-                    for label, point in zip(labels, points)]
+    temperatures = [
+        {"time": label, "value": point.temp, "metric": "室温"}
+        for label, point in zip(labels, points)
+    ]
     colours = [TEMP_LINE]
     if target is not None:
-        temperatures += [{"time": label, "value": target, "metric": "目标"}
-                         for label in labels]
+        temperatures += [{"time": label, "value": target, "metric": "目标"} for label in labels]
         colours.append(TARGET_LINE)
-    charts.append(_history_chart("室温 ℃", colours, temperatures,
-                                 series=target is not None))
+    charts.append(_history_chart("室温 ℃", colours, temperatures, series=target is not None))
 
-    humidity = [{"time": label, "value": point.humidity, "metric": "湿度"}
-                for label, point in zip(labels, points)
-                if point.humidity is not None]
+    humidity = [
+        {"time": label, "value": point.humidity, "metric": "湿度"}
+        for label, point in zip(labels, points)
+        if point.humidity is not None
+    ]
     if humidity:
         charts.append(_history_chart("湿度 %", [HUMID_LINE], humidity, series=False))
     return charts

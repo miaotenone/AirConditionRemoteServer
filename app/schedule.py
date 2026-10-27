@@ -92,8 +92,7 @@ def is_overdue(run_at: float, now: datetime, grace_s: float = DEFAULT_GRACE_S) -
     return (now.timestamp() - run_at) > grace_s
 
 
-def night_bounds(now: datetime, start: str, end: str
-                 ) -> Optional[tuple[float, float]]:
+def night_bounds(now: datetime, start: str, end: str) -> Optional[tuple[float, float]]:
     """Bounds of the most recent night window, or ``None`` if unparseable.
 
     Handles a window that crosses midnight (23:00~07:00): at 02:00 the bounds
@@ -103,17 +102,15 @@ def night_bounds(now: datetime, start: str, end: str
     parsed_start, parsed_end = parse_hhmm(start), parse_hhmm(end)
     if parsed_start is None or parsed_end is None:
         return None
-    start_today = now.replace(hour=parsed_start[0], minute=parsed_start[1],
-                              second=0, microsecond=0)
-    end_today = now.replace(hour=parsed_end[0], minute=parsed_end[1],
-                            second=0, microsecond=0)
+    start_today = now.replace(hour=parsed_start[0], minute=parsed_start[1], second=0, microsecond=0)
+    end_today = now.replace(hour=parsed_end[0], minute=parsed_end[1], second=0, microsecond=0)
 
-    if start_today <= end_today:            # same-day window
+    if start_today <= end_today:  # same-day window
         if now >= start_today:
             return start_today.timestamp(), end_today.timestamp()
         return (start_today - _DAY).timestamp(), (end_today - _DAY).timestamp()
 
-    if now >= start_today:                  # crosses midnight, we are inside
+    if now >= start_today:  # crosses midnight, we are inside
         return start_today.timestamp(), (end_today + _DAY).timestamp()
     return (start_today - _DAY).timestamp(), end_today.timestamp()
 

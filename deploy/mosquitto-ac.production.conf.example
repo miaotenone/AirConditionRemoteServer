@@ -1,0 +1,10 @@
+# REVIEW BEFORE INSTALLING as /etc/mosquitto/conf.d/ac.conf.
+# Replace the documentation-only address with the broker's private LAN address.
+# Restrict the host firewall to the device/service network. Never expose to WAN.
+# TCP 1883 has no TLS: credentials and payloads are plaintext on the network.
+# For untrusted links use a VPN or separately reviewed TLS support on BOTH ends.
+listener 1883 192.0.2.10
+allow_anonymous false
+password_file /etc/mosquitto/ac.passwd
+acl_file /etc/mosquitto/ac.acl
+# Intentionally no persistence directives: the distribution config owns them.

@@ -97,8 +97,14 @@ CREATE TABLE IF NOT EXISTS settings (
 )
 """
 
-_SCHEMAS = (_CARD_SCHEMA, _SEEN_SCHEMA, _PRESET_SCHEMA, _SCHEDULE_SCHEMA,
-            _ENV_SCHEMA, _SETTINGS_SCHEMA)
+_SCHEMAS = (
+    _CARD_SCHEMA,
+    _SEEN_SCHEMA,
+    _PRESET_SCHEMA,
+    _SCHEDULE_SCHEMA,
+    _ENV_SCHEMA,
+    _SETTINGS_SCHEMA,
+)
 
 _PRESET_COLUMNS = "id, name, power, mode, temp, fan, timer_enabled, timer_at"
 
@@ -121,15 +127,16 @@ class CardStore:
         card" and post a brand new one -- exactly the chat spam design 2.3
         forbids. The old row becomes the remote card.
         """
-        columns = [row[1] for row in
-                   self._conn.execute("PRAGMA table_info(card)").fetchall()]
+        columns = [row[1] for row in self._conn.execute("PRAGMA table_info(card)").fetchall()]
         if not columns or "kind" in columns:
             return
         self._conn.execute("ALTER TABLE card RENAME TO card_legacy")
         self._conn.execute(_CARD_SCHEMA)
         self._conn.execute(
             "INSERT INTO card (owner, kind, message_id) "
-            "SELECT owner, ?, message_id FROM card_legacy", (CARD_REMOTE,))
+            "SELECT owner, ?, message_id FROM card_legacy",
+            (CARD_REMOTE,),
+        )
         self._conn.execute("DROP TABLE card_legacy")
         self._conn.commit()
 
@@ -150,8 +157,7 @@ class CardStore:
         self._conn.commit()
 
     def clear_card(self, owner: str, kind: str) -> None:
-        self._conn.execute(
-            "DELETE FROM card WHERE owner = ? AND kind = ?", (owner, kind))
+        self._conn.execute("DELETE FROM card WHERE owner = ? AND kind = ?", (owner, kind))
         self._conn.commit()
 
     # Backwards-compatible aliases: the remote card is the default one.
@@ -175,8 +181,7 @@ class CardStore:
         if not message_id:
             return True
         cursor = self._conn.execute(
-            "INSERT INTO seen (message_id, at) VALUES (?, ?) "
-            "ON CONFLICT(message_id) DO NOTHING",
+            "INSERT INTO seen (message_id, at) VALUES (?, ?) ON CONFLICT(message_id) DO NOTHING",
             (message_id, time.time()),
         )
         self._conn.commit()
@@ -185,8 +190,7 @@ class CardStore:
     # --------------------------------------------------------------- presets
 
     def list_presets(self) -> list[Preset]:
-        rows = self._conn.execute(
-            f"SELECT {_PRESET_COLUMNS} FROM preset ORDER BY id").fetchall()
+        rows = self._conn.execute(f"SELECT {_PRESET_COLUMNS} FROM preset ORDER BY id").fetchall()
         return [_preset_from_row(row) for row in rows]
 
     def get_preset(self, preset_id: int) -> Optional[Preset]:
@@ -209,13 +213,21 @@ class CardStore:
         card asks again before saving.
         """
         now = time.time()
-        values = (preset.name, preset.power, preset.mode, preset.temp, preset.fan,
-                  1 if preset.timer_enabled else 0, preset.timer_at or "")
+        values = (
+            preset.name,
+            preset.power,
+            preset.mode,
+            preset.temp,
+            preset.fan,
+            1 if preset.timer_enabled else 0,
+            preset.timer_at or "",
+        )
         if preset.id:
             self._conn.execute(
                 "UPDATE preset SET name = ?, power = ?, mode = ?, temp = ?, fan = ?, "
                 "timer_enabled = ?, timer_at = ?, updated_at = ? WHERE id = ?",
-                (*values, now, preset.id))
+                (*values, now, preset.id),
+            )
             self._conn.commit()
             return preset.id
 
@@ -226,10 +238,10 @@ class CardStore:
             "mode = excluded.mode, temp = excluded.temp, fan = excluded.fan, "
             "timer_enabled = excluded.timer_enabled, timer_at = excluded.timer_at, "
             "updated_at = excluded.updated_at",
-            (*values, now))
+            (*values, now),
+        )
         self._conn.commit()
-        row = self._conn.execute(
-            "SELECT id FROM preset WHERE name = ?", (preset.name,)).fetchone()
+        row = self._conn.execute("SELECT id FROM preset WHERE name = ?", (preset.name,)).fetchone()
         return int(row[0])
 
     def delete_preset(self, preset_id: int) -> None:
@@ -242,60 +254,70 @@ class CardStore:
         cursor = self._conn.execute(
             "INSERT INTO schedule (kind, payload, run_at, status, created_at) "
             "VALUES (?, ?, ?, ?, ?)",
-            (kind, json.dumps(payload, ensure_ascii=False), run_at,
-             STATUS_PENDING, time.time()))
+            (kind, json.dumps(payload, ensure_ascii=False), run_at, STATUS_PENDING, time.time()),
+        )
         self._conn.commit()
         return int(cursor.lastrowid)
 
     def list_schedules(self, status: Optional[str] = None) -> list[Schedule]:
         if status is None:
             rows = self._conn.execute(
-                "SELECT id, kind, payload, run_at, status FROM schedule "
-                "ORDER BY run_at, id").fetchall()
+                "SELECT id, kind, payload, run_at, status FROM schedule ORDER BY run_at, id"
+            ).fetchall()
         else:
             rows = self._conn.execute(
                 "SELECT id, kind, payload, run_at, status FROM schedule "
-                "WHERE status = ? ORDER BY run_at, id", (status,)).fetchall()
+                "WHERE status = ? ORDER BY run_at, id",
+                (status,),
+            ).fetchall()
         return [_schedule_from_row(row) for row in rows]
 
     def set_schedule_status(self, schedule_id: int, status: str) -> None:
-        self._conn.execute(
-            "UPDATE schedule SET status = ? WHERE id = ?", (status, schedule_id))
+        self._conn.execute("UPDATE schedule SET status = ? WHERE id = ?", (status, schedule_id))
         self._conn.commit()
 
     # ----------------------------------------------------------- env history
 
-    def add_env_sample(self, at: float, temp: int, humidity: Optional[int],
-                       ok: bool = True) -> None:
+    def add_env_sample(
+        self, at: float, temp: int, humidity: Optional[int], ok: bool = True
+    ) -> None:
         self._conn.execute(
             "INSERT INTO env_history (at, temp, humidity, ok) VALUES (?, ?, ?, ?)",
-            (at, temp, humidity, 1 if ok else 0))
+            (at, temp, humidity, 1 if ok else 0),
+        )
         self._conn.commit()
 
     def env_samples(self, since: Optional[float] = None) -> list[EnvSample]:
         if since is None:
             rows = self._conn.execute(
-                "SELECT at, temp, humidity, ok FROM env_history ORDER BY at").fetchall()
+                "SELECT at, temp, humidity, ok FROM env_history ORDER BY at"
+            ).fetchall()
         else:
             rows = self._conn.execute(
-                "SELECT at, temp, humidity, ok FROM env_history WHERE at >= ? "
-                "ORDER BY at", (since,)).fetchall()
-        return [EnvSample(at=row[0], temp=row[1],
-                          humidity=row[2] if row[2] is not None else 0,
-                          ok=bool(row[3])) for row in rows]
+                "SELECT at, temp, humidity, ok FROM env_history WHERE at >= ? ORDER BY at", (since,)
+            ).fetchall()
+        return [
+            EnvSample(
+                at=row[0],
+                temp=row[1],
+                humidity=row[2] if row[2] is not None else 0,
+                ok=bool(row[3]),
+            )
+            for row in rows
+        ]
 
     # -------------------------------------------------------------- settings
 
     def get_setting(self, key: str, default: str = "") -> str:
-        row = self._conn.execute(
-            "SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        row = self._conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
         return row[0] if row else default
 
     def set_setting(self, key: str, value: str) -> None:
         self._conn.execute(
             "INSERT INTO settings (key, value) VALUES (?, ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            (key, value))
+            (key, value),
+        )
         self._conn.commit()
 
     def all_settings(self) -> dict[str, str]:
@@ -311,9 +333,16 @@ class CardStore:
 
 def _preset_from_row(row: Iterable) -> Preset:
     preset_id, name, power, mode, temp, fan, timer_enabled, timer_at = row
-    return Preset(id=int(preset_id), name=name, power=int(power), mode=int(mode),
-                  temp=int(temp), fan=int(fan),
-                  timer_enabled=bool(timer_enabled), timer_at=timer_at or "")
+    return Preset(
+        id=int(preset_id),
+        name=name,
+        power=int(power),
+        mode=int(mode),
+        temp=int(temp),
+        fan=int(fan),
+        timer_enabled=bool(timer_enabled),
+        timer_at=timer_at or "",
+    )
 
 
 def _schedule_from_row(row: Iterable) -> Schedule:
@@ -322,5 +351,6 @@ def _schedule_from_row(row: Iterable) -> Schedule:
         decoded = json.loads(payload)
     except (TypeError, ValueError):
         decoded = {}
-    return Schedule(id=int(schedule_id), kind=kind, payload=decoded,
-                    run_at=float(run_at), status=status)
+    return Schedule(
+        id=int(schedule_id), kind=kind, payload=decoded, run_at=float(run_at), status=status
+    )

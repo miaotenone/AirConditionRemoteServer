@@ -65,8 +65,24 @@ class WeatherNow:
     next2h_delta_c: int = 0
 
 
-def recommend(outdoor_c: float, trend_delta_c: float = 0,
-              room_c: Optional[float] = None) -> Recommendation:
+def actions(recommendation: Recommendation) -> tuple[tuple[str, int], ...]:
+    """Canonical execution order; fan-only advice never sets temperature.
+
+    A comfortable room must not be switched on. A non-skipped suggestion does
+    switch on first, matching the existing service and preset command order.
+    Recommendation.fan is intentionally not sent: this is the legacy contract.
+    """
+    if recommendation.skip:
+        return ()
+    commands = (("power", 1), ("mode", recommendation.mode))
+    if recommendation.temp_used:
+        commands += (("temp", recommendation.temp),)
+    return commands
+
+
+def recommend(
+    outdoor_c: float, trend_delta_c: float = 0, room_c: Optional[float] = None
+) -> Recommendation:
     """Turn an outdoor temperature into a suggested AC setting.
 
     Bands (design Q2): ``>=35 -> 26``, ``30..35 -> 25``, ``26..30 -> 24``,
@@ -100,25 +116,28 @@ def recommend(outdoor_c: float, trend_delta_c: float = 0,
 
     room = None if room_c is None else int(round(room_c))
     if room is None:
-        return Recommendation(mode=mode, temp=temp, fan=0,
-                              note=f"外面 {outdoor}℃，{advice}")
+        return Recommendation(mode=mode, temp=temp, fan=0, note=f"外面 {outdoor}℃，{advice}")
 
     if mode != FAN:
         #: Positive means the target is warmer than the room.
         gap = temp - room
         if abs(gap) <= COMFORT_BAND:
             return Recommendation(
-                mode=FAN, temp=TEMP_DEFAULT, fan=0, skip=True,
-                note=f"外面 {outdoor}℃，室温 {room}℃ 已经在 {temp}℃ 附近，"
-                     "不用开空调")
+                mode=FAN,
+                temp=TEMP_DEFAULT,
+                fan=0,
+                skip=True,
+                note=f"外面 {outdoor}℃，室温 {room}℃ 已经在 {temp}℃ 附近，不用开空调",
+            )
         heating = mode == HEAT
         if (heating and gap < 0) or (not heating and gap > 0):
             near = room + ROOM_MARGIN if heating else room - ROOM_MARGIN
             temp = clamp_temp(near)
             advice = f"建议{'制热' if heating else '制冷'} {temp}℃"
 
-    return Recommendation(mode=mode, temp=temp, fan=0,
-                          note=f"外面 {outdoor}℃，室温 {room}℃，{advice}")
+    return Recommendation(
+        mode=mode, temp=temp, fan=0, note=f"外面 {outdoor}℃，室温 {room}℃，{advice}"
+    )
 
 
 # ------------------------------------------------------------------- fetching
@@ -150,8 +169,9 @@ def _next2h_delta(current: dict, hourly: dict) -> int:
         # cannot see the next two hours either -- no nudge, guessed from
         # nothing.
         hour = stamp[:13]
-        index = next((i for i, t in enumerate(times)
-                      if isinstance(t, str) and t[:13] == hour), None)
+        index = next(
+            (i for i, t in enumerate(times) if isinstance(t, str) and t[:13] == hour), None
+        )
         if index is None:
             return 0
     else:
@@ -160,7 +180,7 @@ def _next2h_delta(current: dict, hourly: dict) -> int:
         index = 0
 
     if index + 2 >= len(temps):
-        return 0                    # the series stops before "in two hours"
+        return 0  # the series stops before "in two hours"
 
     here, there = temps[index], temps[index + 2]
     if not isinstance(here, (int, float)) or not isinstance(there, (int, float)):
@@ -257,8 +277,7 @@ def geolocate(*, timeout: float = 6.0) -> Optional[tuple[float, float]]:
     return None
 
 
-def fetch_current(lat: float, lon: float, *, timeout: float = 8.0
-                  ) -> Optional[WeatherNow]:
+def fetch_current(lat: float, lon: float, *, timeout: float = 8.0) -> Optional[WeatherNow]:
     """Outdoor conditions plus the two-hour trend, from Open-Meteo."""
     try:
         payload = _get_json(FORECAST_URL.format(lat=lat, lon=lon), timeout)
@@ -267,8 +286,7 @@ def fetch_current(lat: float, lon: float, *, timeout: float = 8.0
     return parse_open_meteo(payload)
 
 
-def fetch_now(*, lat: str = "", lon: str = "", timeout: float = 8.0
-              ) -> Optional[WeatherNow]:
+def fetch_now(*, lat: str = "", lon: str = "", timeout: float = 8.0) -> Optional[WeatherNow]:
     """Locate (unless configured) and fetch, in one call the service can use."""
     if lat and lon:
         try:

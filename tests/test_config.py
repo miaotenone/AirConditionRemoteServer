@@ -87,7 +87,6 @@ def test_weather_location_can_be_overridden():
     assert (settings.weather_lat, settings.weather_lon) == ("31.23", "121.47")
 
 
-
 def test_secrets_are_not_leaked_by_repr():
     settings = build()
     assert "topsecret" not in repr(settings)

@@ -62,10 +62,18 @@ def _diff(current: AcState, desired: AcState) -> tuple[tuple[str, int], ...]:
     )
 
 
-def decide(room: Optional[int], *, target: int, ac: AcState, now: float,
-           state: LoopState = LoopState(), history: Sequence[int] = (),
-           forecast_delta: int = 0, deadband: int = DEADBAND,
-           min_interval_s: float = MIN_INTERVAL_S) -> Decision:
+def decide(
+    room: Optional[int],
+    *,
+    target: int,
+    ac: AcState,
+    now: float,
+    state: LoopState = LoopState(),
+    history: Sequence[int] = (),
+    forecast_delta: int = 0,
+    deadband: int = DEADBAND,
+    min_interval_s: float = MIN_INTERVAL_S,
+) -> Decision:
     """What to do this tick, given the room, the target and the situation.
 
     Returns no actions when the room is close enough, when the loop acted
@@ -95,8 +103,12 @@ def decide(room: Optional[int], *, target: int, ac: AcState, now: float,
         # Only wake up when the room has drifted clearly the wrong way.
         wake = too_cold if heating else too_warm
         if wake and not moving_right:
-            desired = AcState(power=1, mode=AC_MODE["heat"] if heating else AC_MODE["cool"],
-                              temp=target, fan=FAN_LOW)
+            desired = AcState(
+                power=1,
+                mode=AC_MODE["heat"] if heating else AC_MODE["cool"],
+                temp=target,
+                fan=FAN_LOW,
+            )
             reason = "heat" if heating else "cool"
         else:
             reason = "off"
@@ -104,8 +116,12 @@ def decide(room: Optional[int], *, target: int, ac: AcState, now: float,
         needs_action = too_cold if heating else too_warm
         over_corrected = too_warm if heating else too_cold
         if needs_action and not moving_right:
-            desired = AcState(power=1, mode=AC_MODE["heat"] if heating else AC_MODE["cool"],
-                              temp=target, fan=FAN_LOW)
+            desired = AcState(
+                power=1,
+                mode=AC_MODE["heat"] if heating else AC_MODE["cool"],
+                temp=target,
+                fan=FAN_LOW,
+            )
             reason = "heat" if heating else "cool"
         elif over_corrected and not moving_right:
             desired = replace(ac, power=0, fan=FAN_LOW)
