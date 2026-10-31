@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### 主分支与提交历史（2026-10-31）
+
+- 按维护者授权整合最新服务端功能与工程规范化到 `main`，清理阶段性功能分支。
+- 主线 59 次历史提交统一为英文 Conventional Commits，逐项保留文件树、作者及时间；新增贡献规范、新旧哈希与恢复说明，见 [迁移记录](docs/git-history-normalization.md)。
+- 离线检查与打包安装验证见 [本轮记录](docs/verification-2026-10-31.md)。源码整合不代表生产部署。
+
 ### 开发与部署
 - 增加 Ruff lint/format、编辑器/换行规范、frozen dev 安装入口与 CI。
 - 本地示例数据库路径改为相对路径；生产配置独立放在 `/etc/ac-bot/`。
